@@ -1,0 +1,457 @@
+from __future__ import annotations
+
+import contextlib
+import copy
+import itertools
+from dataclasses import dataclass
+from math import floor
+from typing import Any
+
+import numpy as np
+import torch
+from torch import nn
+from torch.optim import SGD
+from torch.utils.data import DataLoader
+
+from .models import TemporalBackbone, TemporalClassifier
+from .registry import METHODS, TRAINING_DEFAULTS
+
+
+def _phase_context(phase_plugin, phase: str):
+    if phase_plugin is None:
+        return contextlib.nullcontext()
+    profiler = phase_plugin.profiler
+    return profiler.temporary_phase(phase) if profiler is not None else contextlib.nullcontext()
+
+
+class InstrumentedERACE:
+    """Avalanche ER_ACE loop with mutually exclusive current/replay FLOP phases."""
+
+    def _before_training_exp(self, **kwargs):
+        with _phase_context(self._cil_phase_plugin, "exemplar_or_sample_selection"):
+            return super()._before_training_exp(**kwargs)
+
+    def training_epoch(self, **kwargs):
+        from avalanche.models.utils import avalanche_forward
+
+        for self.mbatch in self.dataloader:
+            if self._stop_training:
+                break
+            self._unpack_minibatch()
+            self._before_training_iteration(**kwargs)
+            if self.replay_loader is not None:
+                self.mb_buffer_x, self.mb_buffer_y, self.mb_buffer_tid = next(self.replay_loader)
+                self.mb_buffer_x = self.mb_buffer_x.to(self.device)
+                self.mb_buffer_y = self.mb_buffer_y.to(self.device)
+                self.mb_buffer_tid = self.mb_buffer_tid.to(self.device)
+                self._cil_extra_processed_samples = int(len(self.mb_buffer_y))
+            self.optimizer.zero_grad()
+            self.loss = self._make_empty_loss()
+            self._before_forward(**kwargs)
+            self.mb_output = self.forward()
+            if self.replay_loader is not None:
+                with _phase_context(self._cil_phase_plugin, "replay_forward"):
+                    self.mb_buffer_out = avalanche_forward(
+                        self.model, self.mb_buffer_x, self.mb_buffer_tid
+                    )
+            self._after_forward(**kwargs)
+            if self.replay_loader is None:
+                self.loss += self.criterion()
+            else:
+                self.loss += self.ace_criterion(
+                    self.mb_output, self.mb_y, self.mb_buffer_out, self.mb_buffer_y
+                )
+            self._before_backward(**kwargs)
+            self.backward()
+            self._after_backward(**kwargs)
+            self._before_update(**kwargs)
+            self.optimizer_step()
+            self._after_update(**kwargs)
+            self._after_training_iteration(**kwargs)
+
+
+def _make_instrumented_er_ace_class():
+    from avalanche.training.supervised import ER_ACE
+
+    class _InstrumentedERACE(InstrumentedERACE, ER_ACE):
+        pass
+
+    return _InstrumentedERACE
+
+
+class InstrumentedCurrentDataFeCAMUpdate:
+    def __init__(self, phase_plugin):
+        from avalanche.core import SupervisedPlugin
+
+        SupervisedPlugin.__init__(self)
+        self.phase_plugin = phase_plugin
+
+    def after_training_exp(self, strategy, **kwargs):
+        from avalanche.training.plugins.update_fecam import _check_has_fecam, _gather_means_and_cov
+
+        _check_has_fecam(strategy.model)
+        with _phase_context(self.phase_plugin, "prototype_and_class_statistics"):
+            means, covs = _gather_means_and_cov(
+                strategy.model,
+                strategy.experience.dataset,
+                strategy.train_mb_size,
+                strategy.device,
+                **kwargs,
+            )
+            strategy.model.eval_classifier.update_class_means_dict(means)
+            strategy.model.eval_classifier.update_class_cov_dict(covs)
+
+
+def _make_fecam_plugin(phase_plugin):
+    from avalanche.core import SupervisedPlugin
+
+    class _Plugin(InstrumentedCurrentDataFeCAMUpdate, SupervisedPlugin):
+        pass
+
+    return _Plugin(phase_plugin)
+
+
+def _make_device_safe_fecam_classifier(**parameters):
+    from avalanche.models import FeCAMClassifier
+
+    class _DeviceSafeFeCAMClassifier(FeCAMClassifier):
+        @torch.no_grad()
+        def forward(self, x):
+            if self.class_means_dict == {}:
+                self.init_missing_classes(range(self.max_class + 1), x.shape[1], x.device)
+            if self.class_means_dict == {}:
+                raise RuntimeError("FeCAM has no class statistics for inference")
+            if self.tukey:
+                x = self._tukey_transforms(x)
+            # Avalanche 0.6 allocates this tensor on CPU, which returns CPU
+            # logits even when features and covariance matrices are on CUDA.
+            maha_dist = torch.full(
+                (self.max_class + 1, x.shape[0]),
+                torch.inf,
+                dtype=x.dtype,
+                device=x.device,
+            )
+            for class_id, prototype in self.class_means_dict.items():
+                maha_dist[class_id] = self._mahalanobis(
+                    x, prototype.to(x.device), self.class_cov_dict[class_id].to(x.device)
+                )
+            return -maha_dist.T
+
+    return _DeviceSafeFeCAMClassifier(**parameters)
+
+
+class InstrumentedICaRLLossMixin:
+    def __init__(self, phase_plugin):
+        super().__init__()
+        self.phase_plugin = phase_plugin
+
+    def before_forward(self, strategy, **kwargs):
+        if self.old_model is not None:
+            with _phase_context(self.phase_plugin, "teacher_distillation_forward"):
+                with torch.no_grad():
+                    self.old_logits = self.old_model(strategy.mb_x)
+
+    def __call__(self, logits, targets):
+        predictions = torch.sigmoid(logits)
+        one_hot = torch.zeros(
+            targets.shape[0], logits.shape[1], dtype=torch.float, device=logits.device
+        )
+        one_hot[range(len(targets)), targets.long()] = 1
+        if self.old_logits is not None:
+            with _phase_context(self.phase_plugin, "teacher_distillation_forward"):
+                old_predictions = torch.sigmoid(self.old_logits)
+            one_hot[:, self.old_classes] = old_predictions[:, self.old_classes]
+            self.old_logits = None
+        return self.criterion(predictions, one_hot)
+
+    def after_training_exp(self, strategy, **kwargs):
+        # IncrementalClassifier changes shape at every experience.  The stock
+        # plugin reuses the previous clone and load_state_dict then fails on
+        # the expanded classifier.  Replacing the frozen teacher is the exact
+        # state transition required by iCaRL and preserves the just-finished
+        # model for distillation in the next experience.
+        self.old_model = copy.deepcopy(strategy.model).to(strategy.device)
+        # TrainEvalModel selects the differentiable classifier through its
+        # training flag. Gradients remain disabled by before_forward.
+        self.old_model.train()
+        self.old_classes += np.unique(strategy.experience.dataset.targets).tolist()
+
+
+def _make_icarl_loss(phase_plugin):
+    from avalanche.training.losses import ICaRLLossPlugin
+
+    class _Loss(InstrumentedICaRLLossMixin, ICaRLLossPlugin):
+        pass
+
+    return _Loss(phase_plugin)
+
+
+class InstrumentedICaRLPluginMixin:
+    """iCaRL plugin with exact <=2000 balancing and real packed Spike persistence."""
+
+    def __init__(self, memory_size, phase_plugin, pack_binary=False):
+        super().__init__(memory_size=memory_size, buffer_transform=None, fixed_memory=True)
+        self.phase_plugin = phase_plugin
+        self.pack_binary = pack_binary
+        self.packed_memory: list[dict[str, Any]] = []
+
+    def _budget_for(self, class_id: int) -> int:
+        q, r = divmod(self.memory_size, len(self.observed_classes))
+        index = self.observed_classes.index(class_id)
+        return q + (1 if index < r else 0)
+
+    def _materialize_packed(self) -> list[torch.Tensor]:
+        materialized = []
+        for item in self.packed_memory:
+            shape = tuple(item["shape"])
+            count = math_prod(shape)
+            unpacked = np.unpackbits(item["data"], bitorder="little", count=count)
+            materialized.append(torch.from_numpy(unpacked.reshape(shape).astype(np.float32, copy=False)))
+        return materialized
+
+    def _pack_current_memory(self) -> None:
+        if not self.pack_binary:
+            for idx, tensor in enumerate(self.x_memory):
+                self.x_memory[idx] = tensor.detach().cpu().to(torch.float32).contiguous()
+            return
+        packed = []
+        for tensor in self.x_memory:
+            array = tensor.detach().cpu().numpy()
+            if not np.logical_or(array == 0, array == 1).all():
+                raise ValueError("Spike ICaRL exemplar is not exactly binary and cannot be stored as 1-bit packed")
+            bits = np.packbits(array.reshape(-1).astype(np.uint8), bitorder="little")
+            packed.append({"data": bits, "shape": tuple(int(v) for v in array.shape)})
+        self.packed_memory = packed
+        self.x_memory = []
+
+    def after_train_dataset_adaptation(self, strategy, **kwargs):
+        if self.pack_binary and strategy.clock.train_exp_counter != 0:
+            self.x_memory = self._materialize_packed()
+        super().after_train_dataset_adaptation(strategy, **kwargs)
+
+    def after_training_exp(self, strategy, **kwargs):
+        strategy.model.eval()
+        with _phase_context(self.phase_plugin, "exemplar_or_sample_selection"):
+            self.construct_exemplar_set(strategy)
+            self.reduce_exemplar_set(strategy)
+        with _phase_context(self.phase_plugin, "prototype_and_class_statistics"):
+            self.compute_class_means(strategy)
+        self._pack_current_memory()
+        strategy.model.train()
+        stored = sum(len(labels) for labels in self.y_memory)
+        if stored > self.memory_size:
+            raise AssertionError(f"ICaRL stored {stored} samples above cap {self.memory_size}")
+
+    def construct_exemplar_set(self, strategy):
+        from avalanche.benchmarks.utils import _taskaware_classification_subset
+
+        tid = strategy.clock.train_exp_counter
+        benchmark = strategy.experience.benchmark
+        nb_cl = benchmark.n_classes_per_exp[tid]
+        previous_seen = sum(benchmark.n_classes_per_exp[:tid])
+        new_classes = self.observed_classes[previous_seen : previous_seen + nb_cl]
+        dataset = strategy.experience.dataset
+        targets = torch.tensor(dataset.targets)
+        for class_id in new_classes:
+            subset = _taskaware_classification_subset(dataset, torch.where(targets == class_id)[0])
+            loader = DataLoader(
+                subset.eval(),
+                collate_fn=getattr(subset, "collate_fn", None),
+                batch_size=strategy.eval_mb_size,
+            )
+            patterns, features = [], []
+            for class_pt, _, _ in loader:
+                class_pt = class_pt.to(strategy.device)
+                patterns.append(class_pt)
+                with torch.no_grad():
+                    features.append(strategy.model.feature_extractor(class_pt).detach())
+            patterns_t = torch.cat(patterns)
+            features_t = torch.cat(features)
+            dmat = features_t.T
+            dmat = dmat / torch.clamp(torch.norm(dmat, dim=0), min=1e-12)
+            mu = torch.mean(dmat, dim=1)
+            order = torch.zeros(patterns_t.shape[0], device=dmat.device)
+            w_t = mu
+            wanted = min(self._budget_for(class_id), patterns_t.shape[0])
+            added, selected = 0, set()
+            while added < wanted:
+                scores = torch.mm(w_t.unsqueeze(0), dmat)
+                if selected:
+                    scores[0, list(selected)] = -torch.inf
+                index = int(torch.argmax(scores).item())
+                order[index] = 1 + added
+                added += 1
+                selected.add(index)
+                w_t = w_t + mu - dmat[:, index]
+            pick = torch.where((order > 0) & (order <= wanted))[0]
+            self.x_memory.append(patterns_t[pick].detach().cpu())
+            self.y_memory.append(np.full(len(pick), class_id, dtype=np.int64))
+            self.order.append(order[pick].detach().cpu())
+
+    def reduce_exemplar_set(self, strategy):
+        for i, class_id in enumerate(self.observed_classes):
+            if i >= len(self.x_memory):
+                break
+            budget = self._budget_for(class_id)
+            pick = torch.where(self.order[i] <= budget)[0]
+            self.x_memory[i] = self.x_memory[i][pick]
+            self.order[i] = self.order[i][pick]
+            self.y_memory[i] = np.asarray(self.y_memory[i], dtype=np.int64)[: len(pick)]
+
+
+def math_prod(values) -> int:
+    result = 1
+    for value in values:
+        result *= int(value)
+    return result
+
+
+def _make_icarl_plugin(memory_size, phase_plugin, pack_binary):
+    from avalanche.training.supervised.icarl import _ICaRLPlugin
+
+    class _Plugin(InstrumentedICaRLPluginMixin, _ICaRLPlugin):
+        pass
+
+    return _Plugin(memory_size, phase_plugin, pack_binary)
+
+
+@dataclass
+class StrategyBundle:
+    method: str
+    strategy: Any
+    phase_plugin: Any | None
+    method_plugin: Any | None = None
+    criterion_plugin: Any | None = None
+
+    def add_manual_after_experience(self, profiler: Any, experience) -> None:
+        if self.method != "cwr_star":
+            return
+        classes = len(experience.classes_in_this_experience)
+        dim = 64
+        # np.average over all current-class weights, then subtract scalar mean per weight.
+        flops = 2 * classes * dim
+        profiler.add_manual(
+            "manual_supplement",
+            flops,
+            "CWR NumPy mean and mean-shift: (m*d-1 adds + 1 divide) + m*d subtracts = 2*m*d",
+            {"m_current_classes": classes, "feature_dim": dim},
+        )
+
+
+def _optimizer(parameters):
+    return SGD(
+        parameters,
+        lr=TRAINING_DEFAULTS["learning_rate"],
+        momentum=TRAINING_DEFAULTS["momentum"],
+        weight_decay=TRAINING_DEFAULTS["weight_decay"],
+        foreach=TRAINING_DEFAULTS["foreach"],
+    )
+
+
+def build_strategy(
+    method: str,
+    in_channels: int,
+    epochs: int,
+    device: torch.device,
+    dataset_name: str,
+    enable_flop_accounting: bool = True,
+) -> StrategyBundle:
+    from avalanche.models import IncrementalClassifier, TrainEvalModel
+    from avalanche.training.supervised import CWRStar, EWC, Naive
+    from avalanche.training.templates import SupervisedTemplate
+
+    if method not in METHODS:
+        raise ValueError(f"Unknown method {method}")
+    if enable_flop_accounting:
+        from .flops import make_flop_phase_plugin
+
+        phase_plugin = make_flop_phase_plugin()
+        phase_plugins = [phase_plugin]
+    else:
+        phase_plugin = None
+        phase_plugins = []
+    common = dict(
+        train_mb_size=TRAINING_DEFAULTS["train_mb_size"],
+        train_epochs=epochs,
+        eval_mb_size=TRAINING_DEFAULTS["eval_mb_size"],
+        device=device,
+        evaluator=None,
+        eval_every=-1,
+    )
+    if method == "er_ace":
+        model = TemporalClassifier(in_channels)
+        strategy_cls = _make_instrumented_er_ace_class()
+        strategy = strategy_cls(
+            model=model,
+            optimizer=_optimizer(model.parameters()),
+            criterion=nn.CrossEntropyLoss(),
+            mem_size=METHODS[method]["memory_size"],
+            batch_size_mem=METHODS[method]["batch_size_mem"],
+            plugins=phase_plugins,
+            **common,
+        )
+        strategy._cil_phase_plugin = phase_plugin
+        return StrategyBundle(method, strategy, phase_plugin, strategy.storage_policy)
+    if method == "ewc":
+        model = TemporalClassifier(in_channels)
+        strategy = EWC(
+            model=model,
+            optimizer=_optimizer(model.parameters()),
+            criterion=nn.CrossEntropyLoss(),
+            ewc_lambda=METHODS[method]["ewc_lambda"],
+            mode=METHODS[method]["mode"],
+            plugins=phase_plugins,
+            **common,
+        )
+        method_plugin = next(p for p in strategy.plugins if p.__class__.__name__ == "EWCPlugin")
+        return StrategyBundle(method, strategy, phase_plugin, method_plugin)
+    if method == "cwr_star":
+        model = TemporalClassifier(in_channels)
+        strategy = CWRStar(
+            model=model,
+            optimizer=_optimizer(model.parameters()),
+            criterion=nn.CrossEntropyLoss(),
+            cwr_layer_name=METHODS[method]["cwr_layer_name"],
+            plugins=phase_plugins,
+            **common,
+        )
+        method_plugin = next(p for p in strategy.plugins if p.__class__.__name__ == "CWRStarPlugin")
+        return StrategyBundle(method, strategy, phase_plugin, method_plugin)
+    if method == "icarl":
+        feature_extractor = TemporalBackbone(in_channels)
+        classifier = IncrementalClassifier(64, initial_out_features=1)
+        eval_classifier = __import__("avalanche.models", fromlist=["NCMClassifier"]).NCMClassifier(normalize=True)
+        model = TrainEvalModel(feature_extractor, classifier, eval_classifier)
+        loss_plugin = _make_icarl_loss(phase_plugin)
+        icarl_plugin = _make_icarl_plugin(
+            METHODS[method]["memory_size"], phase_plugin, pack_binary=dataset_name == "spike"
+        )
+        strategy = SupervisedTemplate(
+            model=model,
+            optimizer=_optimizer([*feature_extractor.parameters(), *classifier.parameters()]),
+            criterion=loss_plugin,
+            plugins=[*phase_plugins, icarl_plugin, loss_plugin],
+            **common,
+        )
+        return StrategyBundle(method, strategy, phase_plugin, icarl_plugin, loss_plugin)
+    if method == "fecam":
+        feature_extractor = TemporalBackbone(in_channels)
+        train_classifier = IncrementalClassifier(64, initial_out_features=1)
+        eval_classifier = _make_device_safe_fecam_classifier(
+            tukey=METHODS[method]["tukey"],
+            shrinkage=METHODS[method]["shrinkage"],
+            shrink1=METHODS[method]["shrink1"],
+            shrink2=METHODS[method]["shrink2"],
+            covnorm=METHODS[method]["covnorm"],
+        )
+        model = TrainEvalModel(feature_extractor, train_classifier, eval_classifier)
+        fecam_plugin = _make_fecam_plugin(phase_plugin)
+        strategy = Naive(
+            model=model,
+            optimizer=_optimizer(model.parameters()),
+            criterion=nn.CrossEntropyLoss(),
+            plugins=[*phase_plugins, fecam_plugin],
+            **common,
+        )
+        return StrategyBundle(method, strategy, phase_plugin, fecam_plugin)
+    raise AssertionError(method)
