@@ -384,6 +384,51 @@ def _optimizer(parameters, training_parameters: dict[str, Any]):
     )
 
 
+def build_si_tuning_strategy(
+    in_channels: int,
+    epochs: int,
+    device: torch.device,
+    method_parameters: dict[str, Any],
+) -> StrategyBundle:
+    """构建仅供手工候选试验使用、且不启用 FLOPs 统计的 SI 策略。"""
+    from avalanche.training.supervised import SynapticIntelligence
+
+    expected = {"si_lambda", "eps"}
+    if set(method_parameters) != expected:
+        raise KeyError(
+            "SI tuning parameters must be exactly "
+            f"{sorted(expected)}, received {sorted(method_parameters)}"
+        )
+    si_lambda = float(method_parameters["si_lambda"])
+    eps = float(method_parameters["eps"])
+    if si_lambda < 0:
+        raise ValueError("SI si_lambda must be non-negative")
+    if eps <= 0:
+        raise ValueError("SI eps must be positive")
+
+    training_parameters = dict(TRAINING_DEFAULTS)
+    model = TemporalClassifier(in_channels)
+    strategy = SynapticIntelligence(
+        model=model,
+        optimizer=_optimizer(model.parameters(), training_parameters),
+        criterion=nn.CrossEntropyLoss(),
+        si_lambda=si_lambda,
+        eps=eps,
+        train_mb_size=training_parameters["train_mb_size"],
+        train_epochs=epochs,
+        eval_mb_size=training_parameters["eval_mb_size"],
+        device=device,
+        evaluator=None,
+        eval_every=-1,
+    )
+    method_plugin = next(
+        plugin
+        for plugin in strategy.plugins
+        if plugin.__class__.__name__ == "SynapticIntelligencePlugin"
+    )
+    return StrategyBundle("si", strategy, None, method_plugin)
+
+
 def build_strategy(
     method: str,
     in_channels: int,

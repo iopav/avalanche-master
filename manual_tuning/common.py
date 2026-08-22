@@ -19,9 +19,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from cil_experiments.data import build_dataset_bundle
 from cil_experiments.output import local_timestamp
 from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS
-from cil_experiments.strategies import build_strategy
+from cil_experiments.strategies import build_si_tuning_strategy, build_strategy
 
 TRAINING_KEYS = set(TRAINING_DEFAULTS)
+MANUAL_CANDIDATE_METHODS: dict[str, dict[str, Any]] = {
+    # Avalanche 的 SI 包装器要求 si_lambda；eps 使用其源码默认值。
+    # 该注册表仅供手工调参，不会进入正式五方法入口。
+    "si": {"si_lambda": 0.0001, "eps": 0.0000001},
+}
 
 
 def _set_determinism(seed: int) -> None:
@@ -60,14 +65,23 @@ def _evaluate(model, experience, device: torch.device, batch_size: int) -> float
     return correct / total
 
 
+def _method_parameters(method: str) -> dict[str, Any]:
+    if method in METHODS:
+        return METHODS[method]
+    if method in MANUAL_CANDIDATE_METHODS:
+        return MANUAL_CANDIDATE_METHODS[method]
+    raise ValueError(f"Unknown method: {method}")
+
+
 def _apply_parameters(method: str, parameters: dict[str, Any]):
     training_before = copy.deepcopy(TRAINING_DEFAULTS)
-    method_before = copy.deepcopy(METHODS[method])
+    selected_method_parameters = _method_parameters(method)
+    method_before = copy.deepcopy(selected_method_parameters)
     for key, value in parameters.items():
         if key in TRAINING_KEYS:
             TRAINING_DEFAULTS[key] = value
-        elif key in METHODS[method]:
-            METHODS[method][key] = value
+        elif key in selected_method_parameters:
+            selected_method_parameters[key] = value
         else:
             raise KeyError(f"Unknown parameter for {method}: {key}")
     return training_before, method_before
@@ -77,8 +91,9 @@ def _restore_parameters(method: str, snapshots) -> None:
     training_before, method_before = snapshots
     TRAINING_DEFAULTS.clear()
     TRAINING_DEFAULTS.update(training_before)
-    METHODS[method].clear()
-    METHODS[method].update(method_before)
+    selected_method_parameters = _method_parameters(method)
+    selected_method_parameters.clear()
+    selected_method_parameters.update(method_before)
 
 
 def _atomic_save(destination: Path, payload: dict[str, Any]) -> None:
@@ -150,7 +165,7 @@ def run_manual(
     """运行不含 FLOPs、存储、延迟和汇总指标的手工调参训练与评估路径。"""
     if dataset not in DATASETS:
         raise ValueError(f"Unknown dataset: {dataset}")
-    if method not in METHODS:
+    if method not in METHODS and method not in MANUAL_CANDIDATE_METHODS:
         raise ValueError(f"Unknown method: {method}")
     resolved_device = torch.device(device or "cuda")
     if resolved_device.type == "cuda" and not torch.cuda.is_available():
@@ -163,14 +178,22 @@ def run_manual(
     data = build_dataset_bundle(PROJECT_ROOT / "dataset", DATASETS[dataset], order_id)
     snapshots = _apply_parameters(method, parameters)
     try:
-        bundle = build_strategy(
-            method,
-            data.spec.in_channels,
-            epochs,
-            resolved_device,
-            dataset,
-            enable_flop_accounting=False,
-        )
+        if method == "si":
+            bundle = build_si_tuning_strategy(
+                data.spec.in_channels,
+                epochs,
+                resolved_device,
+                MANUAL_CANDIDATE_METHODS[method],
+            )
+        else:
+            bundle = build_strategy(
+                method,
+                data.spec.in_channels,
+                epochs,
+                resolved_device,
+                dataset,
+                enable_flop_accounting=False,
+            )
         bundle.strategy.model.to(resolved_device)
         parameter_devices = {parameter.device.type for parameter in bundle.strategy.model.parameters()}
         if parameter_devices != {resolved_device.type}:

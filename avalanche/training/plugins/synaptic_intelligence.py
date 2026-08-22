@@ -11,7 +11,6 @@ from typing import (
     TYPE_CHECKING,
 )
 
-import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Module
@@ -313,7 +312,7 @@ class SynapticIntelligencePlugin(SupervisedPlugin):
                 c
                 * syn_data["trajectory"][param_name].data
                 / (
-                    np.square(
+                    torch.square(
                         syn_data["new_theta"][param_name].data
                         - ewc_data[0][param_name].data
                     )

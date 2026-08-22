@@ -19,7 +19,7 @@ from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
 from cil_experiments.registry import DATASETS, METHODS, ORDERS, SEEDS, validate_order_seed_file
-from cil_experiments.strategies import build_strategy
+from cil_experiments.strategies import build_si_tuning_strategy, build_strategy
 
 
 PROJECT_ROOT = Path(r"D:\workspace\Avalanche\avalanche-master")
@@ -68,6 +68,18 @@ class ProtocolContractTests(unittest.TestCase):
         second = build_strategy("er_ace", 3, 1, torch.device("cpu"), "uwave")
         self.assertIsNot(first.strategy.storage_policy, second.strategy.storage_policy)
         self.assertEqual(first.strategy.mem_size, 200)
+
+    def test_si_is_available_only_through_the_manual_candidate_builder(self):
+        self.assertNotIn("si", METHODS)
+        bundle = build_si_tuning_strategy(
+            3,
+            1,
+            torch.device("cpu"),
+            {"si_lambda": 0.0001, "eps": 0.0000001},
+        )
+        self.assertEqual(bundle.method, "si")
+        self.assertIsNone(bundle.phase_plugin)
+        self.assertEqual(bundle.method_plugin.si_lambda, [0.0001])
 
     def test_final_hyperparameters_cover_every_dataset_method(self):
         validate_final_hyperparameter_registry()
@@ -124,11 +136,12 @@ class ProtocolContractTests(unittest.TestCase):
 
     def test_manual_tuning_has_one_flop_free_entry_per_dataset_method(self):
         manual_root = PROJECT_ROOT / "manual_tuning"
-        expected = {
+        formal_entries = {
             f"{dataset}__{method}.py" for dataset in DATASETS for method in METHODS
         }
+        candidate_entries = {f"{dataset}__si.py" for dataset in DATASETS}
         actual = {path.name for path in manual_root.glob("*.py") if path.name != "common.py"}
-        self.assertEqual(actual, expected)
+        self.assertEqual(actual, formal_entries | candidate_entries)
         for path in manual_root.glob("*__*.py"):
             script = path.read_text(encoding="utf-8")
             self.assertIn('DEVICE = 1, 62, 3, "cuda"', script)
