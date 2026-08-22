@@ -47,7 +47,9 @@ def _evaluate(model, experience, device: torch.device, batch_size: int) -> float
     total = 0
     with torch.no_grad():
         for batch in loader:
-            x, y = batch[0].to(device), batch[1].to(device)
+            non_blocking = device.type == "cuda"
+            x = batch[0].to(device, non_blocking=non_blocking)
+            y = batch[1].to(device, non_blocking=non_blocking)
             prediction = torch.argmax(model(x), dim=1)
             correct += int((prediction == y).sum().item())
             total += int(y.numel())
@@ -105,16 +107,20 @@ def run_manual(
     order_id: int = 1,
     seed: int = 62,
     epochs: int = 3,
-    device: str | None = None,
+    device: str | None = "cuda",
 ) -> Path:
     """Run the formal train/eval path without FLOPs, storage, latency or summary metrics."""
     if dataset not in DATASETS:
         raise ValueError(f"Unknown dataset: {dataset}")
     if method not in METHODS:
         raise ValueError(f"Unknown method: {method}")
-    resolved_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    resolved_device = torch.device(device or "cuda")
     if resolved_device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
+    if resolved_device.type == "cuda":
+        if resolved_device.index is None:
+            resolved_device = torch.device("cuda", torch.cuda.current_device())
+        torch.cuda.set_device(resolved_device)
     _set_determinism(seed)
     data = build_dataset_bundle(PROJECT_ROOT / "dataset", DATASETS[dataset], order_id)
     snapshots = _apply_parameters(method, parameters)
@@ -128,10 +134,20 @@ def run_manual(
             dataset,
             enable_flop_accounting=False,
         )
+        bundle.strategy.model.to(resolved_device)
+        parameter_devices = {parameter.device.type for parameter in bundle.strategy.model.parameters()}
+        if parameter_devices != {resolved_device.type}:
+            raise RuntimeError(
+                f"Model parameters are not entirely on {resolved_device}: {sorted(parameter_devices)}"
+            )
+        device_name = (
+            torch.cuda.get_device_name(resolved_device) if resolved_device.type == "cuda" else "CPU"
+        )
         matrix = np.full((data.spec.tasks, data.spec.tasks), np.nan, dtype=np.float64)
         print(
             f"dataset={dataset} method={method} order_id={order_id} seed={seed} "
-            f"epochs={epochs} device={resolved_device} parameters={parameters}",
+            f"epochs={epochs} device={resolved_device} device_name={device_name} "
+            f"parameters={parameters}",
             flush=True,
         )
         # FLOPs are intentionally disabled for manual tuning.  Do not replace

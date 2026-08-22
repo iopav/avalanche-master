@@ -17,7 +17,7 @@ def run_dataset_cli(dataset_name: str) -> int:
     parser.add_argument("--order-ids", nargs="+", type=int, default=[1])
     parser.add_argument("--seeds", nargs="+", type=int, default=[62])
     parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--output-root", type=Path)

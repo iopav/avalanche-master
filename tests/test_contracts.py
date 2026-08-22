@@ -87,6 +87,10 @@ class ProtocolContractTests(unittest.TestCase):
         }
         actual = {path.name for path in manual_root.glob("*.py") if path.name != "common.py"}
         self.assertEqual(actual, expected)
+        for path in manual_root.glob("*__*.py"):
+            script = path.read_text(encoding="utf-8")
+            self.assertIn('DEVICE = 1, 62, 3, "cuda"', script)
+            self.assertIn("#", script)
         common = (manual_root / "common.py").read_text(encoding="utf-8")
         self.assertIn("bundle.strategy.train", common)
         self.assertIn("enable_flop_accounting=False", common)

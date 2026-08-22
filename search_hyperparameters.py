@@ -365,7 +365,7 @@ def main() -> int:
     parser.add_argument("--run-selected", action="store_true")
     parser.add_argument("--selected-order-id", type=int, default=1)
     parser.add_argument("--selected-seed", type=int, default=62)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parent)
     args = parser.parse_args()
     project_root = args.project_root.resolve()
