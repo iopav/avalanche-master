@@ -107,12 +107,14 @@ METHODS: dict[str, dict[str, Any]] = {
     },
     "fecam": {
         "display_name": "FeCAM",
+        "backbone_training": "first_experience_only_then_frozen",
+        "later_experience_update": "class_means_and_covariances_only_no_sgd",
         "tukey": False,
         "shrinkage": True,
         "shrink1": 1.0,
         "shrink2": 1.0,
         "covnorm": True,
-        "source": "Avalanche FeCAM defaults except tukey disabled for signed shared features",
+        "source": "FeCAM classifier-incremental protocol; Avalanche classifier defaults except tukey disabled for signed shared features",
     },
 }
 

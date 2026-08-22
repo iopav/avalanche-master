@@ -42,7 +42,7 @@ class AtomicRunArtifacts:
         self.log_path = self.method_root / "log" / f"{stem}.log"
         self.summary_path = self.method_root / "summary" / f"{stem}__summary.json"
         self.accuracy_matrix_path = self.method_root / "summary" / f"{stem}__accuracy-matrix.json"
-        self.config_path = self.method_root / "config.json"
+        self.config_path = self.method_root / f"{stem}__config.json"
         self.overwrite = overwrite
         self.config = dict(config)
         self.config["config_hash"] = canonical_hash(config)

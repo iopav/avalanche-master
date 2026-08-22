@@ -79,17 +79,46 @@ def _make_instrumented_er_ace_class():
     return _InstrumentedERACE
 
 
-class InstrumentedCurrentDataFeCAMUpdate:
-    def __init__(self, phase_plugin):
+class FrozenBackboneFeCAMUpdate:
+    """Train the backbone on task 1, then only extract FeCAM statistics."""
+
+    def __init__(self, phase_plugin, first_experience_epochs: int):
         from avalanche.core import SupervisedPlugin
 
         SupervisedPlugin.__init__(self)
         self.phase_plugin = phase_plugin
+        self.first_experience_epochs = int(first_experience_epochs)
+
+    @staticmethod
+    def _freeze_feature_extractor(strategy) -> None:
+        feature_extractor = strategy.model.feature_extractor
+        feature_extractor.eval()
+        for parameter in feature_extractor.parameters():
+            parameter.requires_grad_(False)
+
+    def before_training_exp(self, strategy, **kwargs):
+        experience_index = int(strategy.clock.train_exp_counter)
+        if experience_index == 0:
+            strategy.train_epochs = self.first_experience_epochs
+            return
+        # FeCAM is classifier-incremental: after the first task there is no
+        # gradient training. New classes are incorporated by estimating their
+        # means and covariance matrices with the frozen feature extractor.
+        self._freeze_feature_extractor(strategy)
+        strategy.train_epochs = 0
 
     def after_training_exp(self, strategy, **kwargs):
         from avalanche.training.plugins.update_fecam import _check_has_fecam, _gather_means_and_cov
 
         _check_has_fecam(strategy.model)
+        experience_index = int(strategy.clock.train_exp_counter)
+        profiler = self.phase_plugin.profiler if self.phase_plugin is not None else None
+        statistics_only_loop = experience_index > 0 and profiler is not None
+        if statistics_only_loop:
+            # Later FeCAM experiences have no SGD epoch. Treat the single
+            # statistics pass as the terminal executed loop required by the
+            # metrics1 denominator.
+            profiler.begin_epoch()
         with _phase_context(self.phase_plugin, "prototype_and_class_statistics"):
             means, covs = _gather_means_and_cov(
                 strategy.model,
@@ -100,15 +129,20 @@ class InstrumentedCurrentDataFeCAMUpdate:
             )
             strategy.model.eval_classifier.update_class_means_dict(means)
             strategy.model.eval_classifier.update_class_cov_dict(covs)
+        if statistics_only_loop:
+            profiler.add_processed_samples(len(strategy.experience.dataset))
+            profiler.end_epoch()
+        if experience_index == 0:
+            self._freeze_feature_extractor(strategy)
 
 
-def _make_fecam_plugin(phase_plugin):
+def _make_fecam_plugin(phase_plugin, first_experience_epochs: int):
     from avalanche.core import SupervisedPlugin
 
-    class _Plugin(InstrumentedCurrentDataFeCAMUpdate, SupervisedPlugin):
+    class _Plugin(FrozenBackboneFeCAMUpdate, SupervisedPlugin):
         pass
 
-    return _Plugin(phase_plugin)
+    return _Plugin(phase_plugin, first_experience_epochs)
 
 
 def _make_device_safe_fecam_classifier(**parameters):
@@ -436,7 +470,10 @@ def build_strategy(
         return StrategyBundle(method, strategy, phase_plugin, icarl_plugin, loss_plugin)
     if method == "fecam":
         feature_extractor = TemporalBackbone(in_channels)
-        train_classifier = IncrementalClassifier(64, initial_out_features=1)
+        # Only task 1 is optimized and it always contains three remapped
+        # classes. A fixed base-session head avoids allocating unused later
+        # class weights that FeCAM never consults at inference.
+        train_classifier = nn.Linear(64, 3)
         eval_classifier = _make_device_safe_fecam_classifier(
             tukey=METHODS[method]["tukey"],
             shrinkage=METHODS[method]["shrinkage"],
@@ -445,7 +482,7 @@ def build_strategy(
             covnorm=METHODS[method]["covnorm"],
         )
         model = TrainEvalModel(feature_extractor, train_classifier, eval_classifier)
-        fecam_plugin = _make_fecam_plugin(phase_plugin)
+        fecam_plugin = _make_fecam_plugin(phase_plugin, epochs)
         strategy = Naive(
             model=model,
             optimizer=_optimizer(model.parameters()),

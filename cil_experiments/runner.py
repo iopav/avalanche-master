@@ -141,13 +141,23 @@ def make_config(
     search_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec = DATASETS[dataset_name]
+    effective_sgd_epochs = [int(epochs)] * spec.tasks
+    if method == "fecam":
+        effective_sgd_epochs[1:] = [0] * (spec.tasks - 1)
     return {
         "schema": "metrics1.docx-compatible-avalanche-cil-v1",
         "dataset": dataset_dict(spec),
         "method": method,
         "method_parameters": METHODS[method],
         "backbone": {"in_channels": spec.in_channels, **BACKBONE_CONFIG},
-        "training": {**TRAINING_DEFAULTS, "epochs_per_experience": epochs},
+        "training": {
+            **TRAINING_DEFAULTS,
+            "requested_epochs_per_experience": int(epochs),
+            "effective_sgd_epochs_per_experience": effective_sgd_epochs,
+            "fecam_later_experience_loop": (
+                "one frozen-feature class-statistics pass" if method == "fecam" else None
+            ),
+        },
         "protocol": {
             "augmentation": "none",
             "normalization": "none",

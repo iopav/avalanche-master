@@ -57,26 +57,34 @@ class ProtocolContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="cil-atomic-test-", dir=workspace_temp) as name:
             root = Path(name) / "result"
             config = {"x": 1}
-            with AtomicRunArtifacts(root, "d", "m", 1, 62, config) as artifacts:
+            timestamp = "20260821T120000+0800"
+            matrix_payload = {"accuracy_matrix_lower_triangular": [[0.5]]}
+            with AtomicRunArtifacts(root, "d", "m", 1, 62, config, timestamp=timestamp) as artifacts:
                 artifacts.logger.info("complete")
-                artifacts.commit({"ok": True})
-            self.assertTrue((root / "d" / "m" / "config.json").is_file())
-            self.assertTrue((root / "d" / "m" / "log" / "d__m__order-01__seed-062.log").is_file())
-            summary = root / "d" / "m" / "summary" / "d__m__order-01__seed-062__summary.json"
+                artifacts.commit({"ok": True}, matrix_payload)
+            stem = f"d__m__order-01__seed-062__timestamp-{timestamp}"
+            config_path = root / "d" / "m" / f"{stem}__config.json"
+            self.assertTrue(config_path.is_file())
+            self.assertTrue((root / "d" / "m" / "log" / f"{stem}.log").is_file())
+            summary = root / "d" / "m" / "summary" / f"{stem}__summary.json"
             self.assertEqual(json.loads(summary.read_text(encoding="utf-8")), {"ok": True})
             with self.assertRaises(FileExistsError):
-                with AtomicRunArtifacts(root, "d", "m", 1, 62, config):
+                with AtomicRunArtifacts(root, "d", "m", 1, 62, config, timestamp=timestamp):
                     pass
-            with AtomicRunArtifacts(root, "d", "m", 1, 62, {"x": 2}, overwrite=True) as artifacts:
+            with AtomicRunArtifacts(
+                root, "d", "m", 1, 62, {"x": 2}, overwrite=True, timestamp=timestamp
+            ) as artifacts:
                 artifacts.logger.info("replacement")
-                artifacts.commit({"ok": "replacement"})
+                artifacts.commit({"ok": "replacement"}, matrix_payload)
             self.assertEqual(json.loads(summary.read_text(encoding="utf-8")), {"ok": "replacement"})
-            replaced_config = json.loads((root / "d" / "m" / "config.json").read_text(encoding="utf-8"))
+            replaced_config = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(replaced_config["x"], 2)
 
             failed_root = Path(name) / "failed"
             with self.assertRaisesRegex(RuntimeError, "intentional"):
-                with AtomicRunArtifacts(failed_root, "d", "m", 1, 62, config):
+                with AtomicRunArtifacts(
+                    failed_root, "d", "m", 1, 62, config, timestamp=timestamp
+                ):
                     raise RuntimeError("intentional")
             self.assertFalse(any(failed_root.rglob("*")) if failed_root.exists() else False)
 

@@ -1,5 +1,15 @@
 # Avalanche CIL 实施变更记录与 metrics1 合规审计
 
+## 2026-08-22 覆盖性修订
+
+本节覆盖下文与本轮代码不一致的旧审计结论。ER-ACE 的 storage 按用户指定继续采用“逻辑 replay payload”口径：报告 replay 样本和标签作为训练载荷 materialize 后的字节数，不解释为 Python `Dataset/subset/index` 对象图或 checkpoint 文件的物理体积。`add_like_flop` 也采用用户指定的统一实验约定，即使表达式可写成 `1*a+b`，仍按一次乘法加一次加法计 2 FLOPs；因此 `2*numel` 不再列为错误。average pooling 的逐算术操作公式问题不受该决定影响，仍需单独修正或锁定另一记账约定。
+
+FLOPs 的正式指标来自每个 Experience 外围同一个全局 `FlopCounterMode`：该计数器覆盖实际执行的 current、replay、teacher、loss、backward、optimizer、selection 和 statistics 路径，`estimated_cumulative_dense_flops` 是所有 Experience 全局总量之和，所以 replay 已包含在总数中。阶段标签只是把同一总数按当前执行上下文互斥归类，用于审计漏计和定位错误，不会额外相加或重复计算。iCaRL 把 current/replay 样本混合进同一 dataloader，因而 replay 计算在总量和 terminal denominator 中，但 log 无法把混合 minibatch 精确拆成两个 dispatch 阶段；metrics1 的 summary 不要求这种细分，因此不再把它列为正式总量错误。
+
+FeCAM 已按 classifier-incremental 冻结协议重写：首个 Experience 使用固定三类线性头监督训练 backbone；首任务统计完成后将 feature extractor 全部参数冻结；后续 Experience 设置 `train_epochs=0`，不再执行 SGD，只对当前数据做一次特征提取并更新新类均值和协方差。后续统计 pass 被定义为该 Experience 的 terminal executed loop，以保证 metrics1 的 terminal FLOPs/sample 分母有意义。UWave 两任务轻量检查确认第二任务后 `train_epochs=0`、backbone 全部冻结、4 个类统计已登记，第二任务 FLOPs 全部落在 `prototype_and_class_statistics`。
+
+新生成的正式 config、log、summary、accuracy-matrix JSON 均使用同一个带时区时间戳的 stem；search cost JSON、验证 CSV 和手工 accuracy matrix 原本已经带时间戳。历史固定名或无时间戳文件不做破坏性重命名。遗留 `tests/test_cil_experiments.py` 已迁移到当前双 JSON 提交接口和时间戳命名；`tests.test_contracts` 与 `tests.test_cil_experiments` 当前合计 15 pass、0 error。下文关于 FeCAM 持续训练、固定 `config.json`、普通 add 过计、iCaRL replay 总量缺失和 13 pass/1 error 的陈述均已失效。
+
 审计日期：2026-08-21  
 审计对象：`D:\workspace\Avalanche\avalanche-master` 当前工作树  
 规范来源：`D:\workspace\Avalanche\metrics1.docx` 正文、表格和 17 条 Word 批注，以及其后在对话中确认的覆盖性要求。

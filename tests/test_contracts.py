@@ -60,6 +60,22 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertIsNot(first.strategy.storage_policy, second.strategy.storage_policy)
         self.assertEqual(first.strategy.mem_size, 200)
 
+    def test_fecam_trains_first_experience_then_freezes_and_disables_sgd(self):
+        bundle = build_strategy("fecam", 3, 3, torch.device("cpu"), "uwave")
+        plugin = bundle.method_plugin
+        strategy = bundle.strategy
+        strategy.clock.train_exp_counter = 0
+        plugin.before_training_exp(strategy)
+        self.assertEqual(strategy.train_epochs, 3)
+        self.assertTrue(all(p.requires_grad for p in strategy.model.feature_extractor.parameters()))
+        plugin._freeze_feature_extractor(strategy)
+        strategy.clock.train_exp_counter = 1
+        plugin.before_training_exp(strategy)
+        self.assertEqual(strategy.train_epochs, 0)
+        self.assertTrue(all(not p.requires_grad for p in strategy.model.feature_extractor.parameters()))
+        self.assertIsInstance(strategy.model.train_classifier, torch.nn.Linear)
+        self.assertEqual(strategy.model.train_classifier.out_features, 3)
+
     def test_manual_tuning_has_one_flop_free_entry_per_dataset_method(self):
         manual_root = PROJECT_ROOT / "manual_tuning"
         expected = {
@@ -85,8 +101,9 @@ class ProtocolContractTests(unittest.TestCase):
             with AtomicRunArtifacts(root, "d", "m", 1, 62, config, timestamp=timestamp) as artifacts:
                 artifacts.logger.info("complete")
                 artifacts.commit({"ok": True}, matrix_payload)
-            self.assertTrue((root / "d" / "m" / "config.json").is_file())
             stem = f"d__m__order-01__seed-062__timestamp-{timestamp}"
+            config_path = root / "d" / "m" / f"{stem}__config.json"
+            self.assertTrue(config_path.is_file())
             self.assertTrue((root / "d" / "m" / "log" / f"{stem}.log").is_file())
             summary = root / "d" / "m" / "summary" / f"{stem}__summary.json"
             matrix = root / "d" / "m" / "summary" / f"{stem}__accuracy-matrix.json"
@@ -101,7 +118,7 @@ class ProtocolContractTests(unittest.TestCase):
                 artifacts.logger.info("replacement")
                 artifacts.commit({"ok": "replacement"}, matrix_payload)
             self.assertEqual(json.loads(summary.read_text(encoding="utf-8")), {"ok": "replacement"})
-            replaced_config = json.loads((root / "d" / "m" / "config.json").read_text(encoding="utf-8"))
+            replaced_config = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(replaced_config["x"], 2)
 
             failed_root = Path(name) / "failed"
