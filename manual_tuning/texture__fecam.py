@@ -1,28 +1,27 @@
 from common import run_manual
 
 PARAMETERS = {
-    # SGD step size for the first experience only. Larger values learn the frozen
-    # representation faster but can be unstable; smaller values may underfit it.
+    # 仅用于第一个 Experience 的 SGD 学习率。增大可更快学习即将冻结的表征，
+    # 但过大可能不稳定；减小则可能使首任务表征欠拟合。
     "learning_rate": 0.1,
-    # Tukey power transform. Keep False because the shared feature vector may be
-    # negative; fractional powers of negative values can create NaN values.
+    # Tukey 幂变换开关。共享特征向量可能含负值，负数做分数次幂会产生 NaN，
+    # 因此当前保持 False。
     "tukey": False,
-    # Enables covariance regularization. Disabling it uses raw covariance estimates,
-    # which may be noisy or singular when a class has few samples.
+    # 协方差正则化开关。关闭后直接使用原始协方差；类别样本较少时可能噪声较大或奇异。
     "shrinkage": True,
-    # Diagonal ridge strength. Larger values improve invertibility but can wash out
-    # class-specific variance; smaller values retain variance but may be ill-conditioned.
+    # 对角线岭项强度。增大可改善可逆性，但过大会抹平类别特有方差；
+    # 减小可保留方差信息，但矩阵可能病态。
     "shrink1": 1.0,
-    # Off-diagonal shrink strength. Larger values smooth correlations more strongly;
-    # excessive values distort class covariance, while small values preserve noise.
+    # 非对角收缩强度。增大可更强地平滑特征相关性；过大会扭曲类别协方差，
+    # 过小则可能保留较多噪声。
     "shrink2": 1.0,
-    # Converts covariance to correlation scale. True reduces channel-scale dominance;
-    # False preserves absolute feature variance and can favor high-variance dimensions.
+    # 是否把协方差转换到相关系数尺度。True 可降低通道尺度差异的影响；
+    # False 保留绝对方差，可能偏向高方差特征维度。
     "covnorm": True,
 }
 
-# EPOCHS trains only the first experience; later experiences use the frozen backbone
-# and one statistics pass. Keep ORDER_ID/SEED fixed. CUDA is mandatory here.
+# EPOCHS 只控制第一个 Experience 的训练；后续 Experience 使用冻结的 backbone，
+# 并执行一次统计量计算。比较候选参数时保持 ORDER_ID/SEED 不变，此脚本必须使用 CUDA。
 ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 3, "cuda"
 
 if __name__ == "__main__":

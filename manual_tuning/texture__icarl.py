@@ -1,19 +1,19 @@
 from common import run_manual
 
 PARAMETERS = {
-    # SGD step size. Larger values adapt quickly but can disturb old features;
-    # smaller values are more conservative but may underfit new classes.
+    # SGD 学习率。增大可快速适应，但可能扰动旧特征；减小更保守，
+    # 但可能使新类欠拟合。
     "learning_rate": 0.1,
-    # Total exemplar cap shared by all seen classes. Larger values usually improve
-    # NCM prototypes and retention, at higher storage, selection and replay cost.
+    # 所有已见类别共享的 exemplar 总上限。增大通常可改善 NCM 原型和旧类保持，
+    # 但会增加存储、样本选择和回放计算成本。
     "memory_size": 2000,
-    # Locked protocol flag: True means a fixed total budget divided among seen classes.
-    # The local adapter currently implements only this mode, so do not tune this field.
+    # 锁定协议参数：True 表示固定总预算并在已见类别间分配。
+    # 本地适配器只实现此模式，因此不要调节该字段。
     "fixed_memory": True,
 }
 
-# Keep ORDER_ID and SEED fixed across candidates. More EPOCHS can improve representation
-# learning but increases replay compute and overfitting risk. CUDA is mandatory here.
+# 比较候选参数时保持 ORDER_ID 和 SEED 不变。增大 EPOCHS 可改善表征学习，
+# 但会增加回放计算量和过拟合风险。此脚本必须使用 CUDA。
 ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 3, "cuda"
 
 if __name__ == "__main__":

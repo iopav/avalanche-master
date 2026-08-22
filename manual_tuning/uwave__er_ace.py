@@ -1,19 +1,18 @@
 from common import run_manual
 
 PARAMETERS = {
-    # SGD step size. Larger values adapt faster but can destabilize old classes;
-    # smaller values reduce update size but may underfit new classes.
+    # SGD 学习率。增大可加快适应，但可能破坏旧类；减小可缩小参数更新，
+    # 但可能使新类欠拟合。
     "learning_rate": 0.1,
-    # Total logical replay-sample capacity. Larger values usually improve retention,
-    # while increasing persistent storage and exemplar-management work.
+    # 逻辑回放样本总容量。增大通常有助于保留旧类，但会增加持久存储和样本管理开销。
     "memory_size": 200,
-    # Replay samples paired with each current minibatch. Larger values strengthen
-    # replay but raise compute and can reduce emphasis on the current task.
+    # 每个当前数据 minibatch 配对的回放样本数。增大可强化回放，但会增加计算量，
+    # 并可能降低当前任务在一次更新中的权重。
     "batch_size_mem": 10,
 }
 
-# Keep ORDER_ID and SEED fixed across candidates. More EPOCHS gives more optimization
-# steps but costs more and can overfit. Explicit CUDA prevents silent CPU fallback.
+# 比较候选参数时保持 ORDER_ID 和 SEED 不变。增大 EPOCHS 会增加优化步数，
+# 同时增加耗时和过拟合风险。显式指定 CUDA 可防止静默回退到 CPU。
 ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 3, "cuda"
 
 if __name__ == "__main__":
