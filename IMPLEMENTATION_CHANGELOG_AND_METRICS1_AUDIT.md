@@ -2,6 +2,8 @@
 
 ## 2026-08-22 覆盖性修订
 
+后续正式超参读取缺口已经修复。新增 `cil_experiments/final_hyperparameters.py`，显式保存 Spike/Texture/UWave × ER-ACE/EWC/CWRStar/iCaRL/FeCAM 的15套完整配置。`run_spike.py`、`run_texture.py` 和 `run_uwave.py` 不再接受 epochs 覆盖，正式 runner 根据 dataset-method 读取该文件，并把完整 resolved entry、条目 SHA-256 和任何 diagnostic override 写入 config/log。初始 `FINAL_HYPERPARAMETERS_LOCKED=False`，15组参数全部确认并改为 True 前，正式入口直接失败；带显式 candidate override 的验证诊断不受该锁影响。手工调参和验证搜索不会自动修改最终注册表；选定参数后必须由用户写入对应条目。下文关于“正式入口只读通用 `TRAINING_DEFAULTS`、没有 locked-config registry”的结论已失效。
+
 本节覆盖下文与本轮代码不一致的旧审计结论。ER-ACE 的 storage 按用户指定继续采用“逻辑 replay payload”口径：报告 replay 样本和标签作为训练载荷 materialize 后的字节数，不解释为 Python `Dataset/subset/index` 对象图或 checkpoint 文件的物理体积。`add_like_flop` 也采用用户指定的统一实验约定，即使表达式可写成 `1*a+b`，仍按一次乘法加一次加法计 2 FLOPs；因此 `2*numel` 不再列为错误。adaptive average pooling 已按每个池 `k-1` 次加法加 1 次除法修正，全层计 `input_numel` FLOPs。
 
 FLOPs 的正式指标来自每个 Experience 外围同一个全局 `FlopCounterMode`：该计数器覆盖实际执行的 current、replay、teacher、loss、backward、optimizer、selection 和 statistics 路径，`estimated_cumulative_dense_flops` 是所有 Experience 全局总量之和，所以 replay 已包含在总数中。阶段标签只是把同一总数按当前执行上下文互斥归类，用于审计漏计和定位错误，不会额外相加或重复计算。iCaRL 把 current/replay 样本混合进同一 dataloader，因而 replay 计算在总量和 terminal denominator 中，但 log 无法把混合 minibatch 精确拆成两个 dispatch 阶段；metrics1 的 summary 不要求这种细分，因此不再把它列为正式总量错误。

@@ -424,6 +424,7 @@ def main() -> int:
                     device,
                     overwrite=True,
                     search_provenance=provenance,
+                    parameter_overrides=payload["selected_hyperparameters"],
                 )
                 print(path)
             finally:

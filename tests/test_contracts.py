@@ -10,6 +10,11 @@ import torch
 
 from cil_experiments.data import validate_source_files
 from cil_experiments.flops import adaptive_pool_flop, add_like_flop, profile_single_forward
+from cil_experiments.final_hyperparameters import (
+    FINAL_HYPERPARAMETERS,
+    get_final_hyperparameters,
+    validate_final_hyperparameter_registry,
+)
 from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
@@ -63,6 +68,43 @@ class ProtocolContractTests(unittest.TestCase):
         second = build_strategy("er_ace", 3, 1, torch.device("cpu"), "uwave")
         self.assertIsNot(first.strategy.storage_policy, second.strategy.storage_policy)
         self.assertEqual(first.strategy.mem_size, 200)
+
+    def test_final_hyperparameters_cover_every_dataset_method(self):
+        validate_final_hyperparameter_registry()
+        self.assertEqual(set(FINAL_HYPERPARAMETERS), set(DATASETS))
+        for dataset in DATASETS:
+            self.assertEqual(set(FINAL_HYPERPARAMETERS[dataset]), set(METHODS))
+            for method in METHODS:
+                first = get_final_hyperparameters(dataset, method)
+                second = get_final_hyperparameters(dataset, method)
+                self.assertIsNot(first, second)
+                first["learning_rate"] = 999.0
+                self.assertNotEqual(first["learning_rate"], second["learning_rate"])
+
+    def test_strategy_uses_resolved_dataset_method_hyperparameters(self):
+        parameters = get_final_hyperparameters(
+            "uwave",
+            "ewc",
+            {
+                "learning_rate": 0.0123,
+                "train_mb_size": 7,
+                "eval_mb_size": 11,
+                "ewc_lambda": 0.7,
+            },
+        )
+        bundle = build_strategy(
+            "ewc",
+            3,
+            int(parameters["epochs_per_experience"]),
+            torch.device("cpu"),
+            "uwave",
+            enable_flop_accounting=False,
+            resolved_parameters=parameters,
+        )
+        self.assertEqual(bundle.strategy.optimizer.param_groups[0]["lr"], 0.0123)
+        self.assertEqual(bundle.strategy.train_mb_size, 7)
+        self.assertEqual(bundle.strategy.eval_mb_size, 11)
+        self.assertEqual(bundle.method_plugin.ewc_lambda, 0.7)
 
     def test_fecam_trains_first_experience_then_freezes_and_disables_sgd(self):
         bundle = build_strategy("fecam", 3, 3, torch.device("cpu"), "uwave")

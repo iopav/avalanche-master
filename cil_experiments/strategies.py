@@ -372,13 +372,15 @@ class StrategyBundle:
         )
 
 
-def _optimizer(parameters):
+def _optimizer(parameters, training_parameters: dict[str, Any]):
+    if training_parameters["optimizer"] != "SGD":
+        raise ValueError(f"Unsupported optimizer: {training_parameters['optimizer']}")
     return SGD(
         parameters,
-        lr=TRAINING_DEFAULTS["learning_rate"],
-        momentum=TRAINING_DEFAULTS["momentum"],
-        weight_decay=TRAINING_DEFAULTS["weight_decay"],
-        foreach=TRAINING_DEFAULTS["foreach"],
+        lr=training_parameters["learning_rate"],
+        momentum=training_parameters["momentum"],
+        weight_decay=training_parameters["weight_decay"],
+        foreach=training_parameters["foreach"],
     )
 
 
@@ -389,6 +391,7 @@ def build_strategy(
     device: torch.device,
     dataset_name: str,
     enable_flop_accounting: bool = True,
+    resolved_parameters: dict[str, Any] | None = None,
 ) -> StrategyBundle:
     from avalanche.models import IncrementalClassifier, TrainEvalModel
     from avalanche.training.supervised import CWRStar, EWC, Naive
@@ -396,6 +399,15 @@ def build_strategy(
 
     if method not in METHODS:
         raise ValueError(f"Unknown method {method}")
+    training_parameters = dict(TRAINING_DEFAULTS)
+    method_parameters = dict(METHODS[method])
+    for key, value in (resolved_parameters or {}).items():
+        if key in training_parameters:
+            training_parameters[key] = value
+        elif key in method_parameters:
+            method_parameters[key] = value
+        elif key != "epochs_per_experience":
+            raise KeyError(f"Unknown resolved parameter for {method}: {key}")
     if enable_flop_accounting:
         from .flops import make_flop_phase_plugin
 
@@ -405,9 +417,9 @@ def build_strategy(
         phase_plugin = None
         phase_plugins = []
     common = dict(
-        train_mb_size=TRAINING_DEFAULTS["train_mb_size"],
+        train_mb_size=training_parameters["train_mb_size"],
         train_epochs=epochs,
-        eval_mb_size=TRAINING_DEFAULTS["eval_mb_size"],
+        eval_mb_size=training_parameters["eval_mb_size"],
         device=device,
         evaluator=None,
         eval_every=-1,
@@ -417,10 +429,10 @@ def build_strategy(
         strategy_cls = _make_instrumented_er_ace_class()
         strategy = strategy_cls(
             model=model,
-            optimizer=_optimizer(model.parameters()),
+            optimizer=_optimizer(model.parameters(), training_parameters),
             criterion=nn.CrossEntropyLoss(),
-            mem_size=METHODS[method]["memory_size"],
-            batch_size_mem=METHODS[method]["batch_size_mem"],
+            mem_size=method_parameters["memory_size"],
+            batch_size_mem=method_parameters["batch_size_mem"],
             plugins=phase_plugins,
             **common,
         )
@@ -430,10 +442,10 @@ def build_strategy(
         model = TemporalClassifier(in_channels)
         strategy = EWC(
             model=model,
-            optimizer=_optimizer(model.parameters()),
+            optimizer=_optimizer(model.parameters(), training_parameters),
             criterion=nn.CrossEntropyLoss(),
-            ewc_lambda=METHODS[method]["ewc_lambda"],
-            mode=METHODS[method]["mode"],
+            ewc_lambda=method_parameters["ewc_lambda"],
+            mode=method_parameters["mode"],
             plugins=phase_plugins,
             **common,
         )
@@ -443,9 +455,9 @@ def build_strategy(
         model = TemporalClassifier(in_channels)
         strategy = CWRStar(
             model=model,
-            optimizer=_optimizer(model.parameters()),
+            optimizer=_optimizer(model.parameters(), training_parameters),
             criterion=nn.CrossEntropyLoss(),
-            cwr_layer_name=METHODS[method]["cwr_layer_name"],
+            cwr_layer_name=method_parameters["cwr_layer_name"],
             plugins=phase_plugins,
             **common,
         )
@@ -458,11 +470,13 @@ def build_strategy(
         model = TrainEvalModel(feature_extractor, classifier, eval_classifier)
         loss_plugin = _make_icarl_loss(phase_plugin)
         icarl_plugin = _make_icarl_plugin(
-            METHODS[method]["memory_size"], phase_plugin, pack_binary=dataset_name == "spike"
+            method_parameters["memory_size"], phase_plugin, pack_binary=dataset_name == "spike"
         )
         strategy = SupervisedTemplate(
             model=model,
-            optimizer=_optimizer([*feature_extractor.parameters(), *classifier.parameters()]),
+            optimizer=_optimizer(
+                [*feature_extractor.parameters(), *classifier.parameters()], training_parameters
+            ),
             criterion=loss_plugin,
             plugins=[*phase_plugins, icarl_plugin, loss_plugin],
             **common,
@@ -475,17 +489,17 @@ def build_strategy(
         # class weights that FeCAM never consults at inference.
         train_classifier = nn.Linear(64, 3)
         eval_classifier = _make_device_safe_fecam_classifier(
-            tukey=METHODS[method]["tukey"],
-            shrinkage=METHODS[method]["shrinkage"],
-            shrink1=METHODS[method]["shrink1"],
-            shrink2=METHODS[method]["shrink2"],
-            covnorm=METHODS[method]["covnorm"],
+            tukey=method_parameters["tukey"],
+            shrinkage=method_parameters["shrinkage"],
+            shrink1=method_parameters["shrink1"],
+            shrink2=method_parameters["shrink2"],
+            covnorm=method_parameters["covnorm"],
         )
         model = TrainEvalModel(feature_extractor, train_classifier, eval_classifier)
         fecam_plugin = _make_fecam_plugin(phase_plugin, epochs)
         strategy = Naive(
             model=model,
-            optimizer=_optimizer(model.parameters()),
+            optimizer=_optimizer(model.parameters(), training_parameters),
             criterion=nn.CrossEntropyLoss(),
             plugins=[*phase_plugins, fecam_plugin],
             **common,

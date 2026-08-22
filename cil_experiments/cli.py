@@ -16,7 +16,6 @@ def run_dataset_cli(dataset_name: str) -> int:
     parser.add_argument("--methods", nargs="+", default=list(METHODS), choices=list(METHODS))
     parser.add_argument("--order-ids", nargs="+", type=int, default=[1])
     parser.add_argument("--seeds", nargs="+", type=int, default=[62])
-    parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--dataset-root", type=Path)
@@ -41,7 +40,7 @@ def run_dataset_cli(dataset_name: str) -> int:
                         method,
                         order_id,
                         seed,
-                        args.epochs,
+                        None,
                         device,
                         overwrite=args.overwrite,
                     )
