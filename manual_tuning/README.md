@@ -8,7 +8,7 @@ Edit only the `PARAMETERS`, `ORDER_ID`, `SEED`, `EPOCHS` and `DEVICE` constants 
 conda run -n py310 python manual_tuning\spike__er_ace.py
 ```
 
-These entries intentionally do not call `PhaseFlopProfiler`, `compute_persistent_storage`, latency measurement or metrics-summary generation.  A successful run prints each observed row and atomically saves one timestamped lower-triangular accuracy-matrix JSON under `manual_tuning/results/<dataset>/<method>/`.  A failed run does not save a matrix.
+These entries intentionally do not call `PhaseFlopProfiler`, `compute_persistent_storage`, latency measurement or metrics-summary generation. A successful run prints the complete lower-triangular accuracy matrix once, after all training and evaluation have finished. Manual tuning does not save JSON or any other result artifact; a failed run prints the normal traceback and never prints a partial matrix as a completed result.
 
 CPU work is still expected for DataLoader workers, NumPy/JSON processing, Spike bit packing and persistent replay payloads. Model forward, loss, backward, optimizer updates, FeCAM statistics and iCaRL feature extraction use the selected CUDA device.
 

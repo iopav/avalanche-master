@@ -99,6 +99,44 @@ def _atomic_save(destination: Path, payload: dict[str, Any]) -> None:
         raise
 
 
+def _format_accuracy_matrix(matrix: np.ndarray) -> str:
+    """把完整下三角准确率矩阵格式化为一次性终端输出。"""
+    task_count = int(matrix.shape[0])
+    cell_width = 8
+    row_label_width = 10
+    separator = "-" * (row_label_width + 3 + cell_width * task_count + 3 + 12)
+    lines = [
+        "",
+        "准确率矩阵（%，行表示完成训练的任务，列表示测试任务）",
+        separator,
+        f"{'训练后':>{row_label_width}} |"
+        + "".join(f"T{index + 1:02d}".rjust(cell_width) for index in range(task_count))
+        + " | 已见任务均值",
+        separator,
+    ]
+    for row in range(task_count):
+        cells = []
+        for column in range(task_count):
+            if column <= row:
+                cells.append(f"{matrix[row, column] * 100:>{cell_width}.2f}")
+            else:
+                cells.append("-".rjust(cell_width))
+        seen_mean = float(np.mean(matrix[row, : row + 1])) * 100
+        lines.append(
+            f"T{row + 1:02d}".rjust(row_label_width)
+            + " |"
+            + "".join(cells)
+            + f" | {seen_mean:>10.2f}"
+        )
+    lines.extend(
+        [
+            separator,
+            f"最终平均准确率（最后一行）: {float(np.mean(matrix[-1])) * 100:.2f}%",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def run_manual(
     *,
     dataset: str,
@@ -108,8 +146,8 @@ def run_manual(
     seed: int = 62,
     epochs: int = 3,
     device: str | None = "cuda",
-) -> Path:
-    """Run the formal train/eval path without FLOPs, storage, latency or summary metrics."""
+) -> np.ndarray:
+    """运行不含 FLOPs、存储、延迟和汇总指标的手工调参训练与评估路径。"""
     if dataset not in DATASETS:
         raise ValueError(f"Unknown dataset: {dataset}")
     if method not in METHODS:
@@ -124,7 +162,6 @@ def run_manual(
     _set_determinism(seed)
     data = build_dataset_bundle(PROJECT_ROOT / "dataset", DATASETS[dataset], order_id)
     snapshots = _apply_parameters(method, parameters)
-    timestamp = local_timestamp()
     try:
         bundle = build_strategy(
             method,
@@ -166,34 +203,39 @@ def run_manual(
                     resolved_device,
                     int(TRAINING_DEFAULTS["eval_mb_size"]),
                 )
-            values = " ".join(f"{value:.6f}" for value in matrix[task_index, : task_index + 1])
-            print(f"after_task_{task_index + 1:02d} {values}", flush=True)
-        lower = [
-            [float(matrix[row, col]) if col <= row else None for col in range(data.spec.tasks)]
-            for row in range(data.spec.tasks)
-        ]
-        payload = {
-            "dataset": dataset,
-            "method": method,
-            "order_id": int(order_id),
-            "seed": int(seed),
-            "epochs_per_experience": int(epochs),
-            "timestamp": timestamp,
-            "parameters": copy.deepcopy(parameters),
-            "accuracy_matrix_lower_triangular": lower,
-        }
-        destination = (
-            Path(__file__).resolve().parent
-            / "results"
-            / dataset
-            / method
-            / (
-                f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
-                f"__timestamp-{timestamp}__accuracy-matrix.json"
-            )
-        )
-        _atomic_save(destination, payload)
-        print(f"accuracy_matrix_saved={destination}", flush=True)
-        return destination
+        # 全部训练和评估结束后再用一次 stdout 写入打印完整矩阵，避免训练阶段产生的
+        # warning 或 stderr 信息插入矩阵各行。真实异常仍按原逻辑输出 traceback。
+        sys.stdout.write(_format_accuracy_matrix(matrix) + "\n")
+        sys.stdout.flush()
+
+        # 手工调参阶段只打印准确率矩阵，不保存 JSON。若以后需要恢复保存功能，
+        # 再取消下面原保存流程的注释；正式实验的 JSON 输出不受这里影响。
+        # lower = [
+        #     [float(matrix[row, col]) if col <= row else None for col in range(data.spec.tasks)]
+        #     for row in range(data.spec.tasks)
+        # ]
+        # payload = {
+        #     "dataset": dataset,
+        #     "method": method,
+        #     "order_id": int(order_id),
+        #     "seed": int(seed),
+        #     "epochs_per_experience": int(epochs),
+        #     "timestamp": local_timestamp(),
+        #     "parameters": copy.deepcopy(parameters),
+        #     "accuracy_matrix_lower_triangular": lower,
+        # }
+        # destination = (
+        #     Path(__file__).resolve().parent
+        #     / "results"
+        #     / dataset
+        #     / method
+        #     / (
+        #         f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
+        #         f"__timestamp-{payload['timestamp']}__accuracy-matrix.json"
+        #     )
+        # )
+        # _atomic_save(destination, payload)
+        # print(f"accuracy_matrix_saved={destination}", flush=True)
+        return matrix.copy()
     finally:
         _restore_parameters(method, snapshots)

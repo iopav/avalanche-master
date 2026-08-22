@@ -154,7 +154,9 @@ class ER_ACE(SupervisedTemplate):
 
     def _before_training_exp(self, **kwargs):
         # Update buffer before training exp so that we have current data in
-        self.storage_policy.update(self, **kwargs)
+        # the non-online ER-ACE buffer. ``update`` only delegated to
+        # ``post_adapt`` and is deprecated since Avalanche 0.7.
+        self.storage_policy.post_adapt(self, self.experience)
         buffer = self.storage_policy.buffer
         if (
             len(buffer) >= self.batch_size_mem
