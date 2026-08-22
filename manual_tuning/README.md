@@ -1,6 +1,6 @@
 # Manual CIL hyperparameter runs
 
-This directory contains one editable entry point for every formal dataset-method pair, plus manual-only SI and LwF candidate scripts used to select a possible EWC replacement. Each script uses the same dataset adapter, class order, deterministic seed, shared temporal backbone, Avalanche strategy, minibatch protocol, no-augmentation protocol and post-experience test evaluation as the formal runner. Candidate methods cannot be selected by the formal entrypoints.
+This directory contains one editable entry point for every formal dataset-method pair, plus manual-only SI, LwF and Spike EWC+Cosine candidate scripts. Each script uses the same dataset adapter, class order, deterministic seed, shared temporal backbone, Avalanche strategy, minibatch protocol, no-augmentation protocol and post-experience test evaluation as the formal runner. Candidate methods cannot be selected by the formal entrypoints.
 
 Edit only the `PARAMETERS`, `ORDER_ID`, `SEED`, `EPOCHS` and `DEVICE` constants near the top of a script, then run it from the `py310` environment. Every script now explicitly uses `DEVICE = "cuda"`; CUDA unavailability is an error and never silently falls back to CPU. At startup the runner prints the resolved CUDA device name and verifies that every model parameter is on the requested device. Example:
 

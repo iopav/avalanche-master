@@ -472,6 +472,104 @@ def build_lwf_tuning_strategy(
     return StrategyBundle("lwf", strategy, None, method_plugin)
 
 
+def _make_ewc_compatible_cosine_classifier(feature_dim: int):
+    """Keep Avalanche cosine semantics while preserving EWC parameter names."""
+    from avalanche.models import CosineIncrementalClassifier
+    from avalanche.models.cosine_layer import CosineLinear
+
+    class _EWCCosineIncrementalClassifier(CosineIncrementalClassifier):
+        def __init__(self, in_features: int):
+            # num_classes=0 also avoids the upstream fixed set(range(5)) state.
+            super().__init__(in_features, num_classes=0)
+            self.register_buffer("_device_anchor", torch.empty(0), persistent=False)
+
+        def adaptation(self, experience):
+            new_classes = sorted(
+                int(value)
+                for value in set(experience.classes_in_this_experience) - self.classes
+            )
+            if not new_classes:
+                return
+            self.classes.update(new_classes)
+            self.class_order.extend(new_classes)
+            expanded = CosineLinear(
+                self.feature_dim,
+                len(self.class_order),
+                sigma=True,
+            ).to(self._device_anchor.device)
+            if self.fc is not None:
+                old_count = int(self.fc.out_features)
+                with torch.no_grad():
+                    expanded.weight[:old_count].copy_(self.fc.weight)
+                    expanded.sigma.copy_(self.fc.sigma)
+            self.fc = expanded
+
+        def forward(self, x):
+            if self.fc is None or not self.class_order:
+                raise RuntimeError("Cosine classifier has not been adapted to any class")
+            unmapped_logits = self.fc(x)
+            mapped_logits = unmapped_logits.new_full(
+                (len(unmapped_logits), max(self.class_order) + 1),
+                -1000.0,
+            )
+            mapped_logits[:, self.class_order] = unmapped_logits
+            return mapped_logits
+
+    return _EWCCosineIncrementalClassifier(feature_dim)
+
+
+def build_ewc_cosine_tuning_strategy(
+    in_channels: int,
+    epochs: int,
+    device: torch.device,
+    method_parameters: dict[str, Any],
+) -> StrategyBundle:
+    """构建仅供手工候选试验使用、且不启用 FLOPs 统计的 EWC+Cosine 策略。"""
+    from avalanche.training.supervised import EWC
+
+    expected = {"ewc_lambda", "mode"}
+    if set(method_parameters) != expected:
+        raise KeyError(
+            "EWC+Cosine tuning parameters must be exactly "
+            f"{sorted(expected)}, received {sorted(method_parameters)}"
+        )
+    ewc_lambda = float(method_parameters["ewc_lambda"])
+    mode = str(method_parameters["mode"])
+    if ewc_lambda < 0:
+        raise ValueError("EWC+Cosine ewc_lambda must be non-negative")
+    if mode != "separate":
+        raise ValueError("EWC+Cosine manual candidate currently requires mode='separate'")
+
+    class _TemporalCosineClassifier(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.feature_extractor = TemporalBackbone(in_channels)
+            self.classifier = _make_ewc_compatible_cosine_classifier(64)
+
+        def forward(self, x):
+            return self.classifier(self.feature_extractor(x))
+
+    training_parameters = dict(TRAINING_DEFAULTS)
+    model = _TemporalCosineClassifier()
+    strategy = EWC(
+        model=model,
+        optimizer=_optimizer(model.parameters(), training_parameters),
+        criterion=nn.CrossEntropyLoss(),
+        ewc_lambda=ewc_lambda,
+        mode=mode,
+        train_mb_size=training_parameters["train_mb_size"],
+        train_epochs=epochs,
+        eval_mb_size=training_parameters["eval_mb_size"],
+        device=device,
+        evaluator=None,
+        eval_every=-1,
+    )
+    method_plugin = next(
+        plugin for plugin in strategy.plugins if plugin.__class__.__name__ == "EWCPlugin"
+    )
+    return StrategyBundle("ewc_cosine", strategy, None, method_plugin)
+
+
 def build_strategy(
     method: str,
     in_channels: int,

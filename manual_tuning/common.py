@@ -20,6 +20,7 @@ from cil_experiments.data import build_dataset_bundle
 from cil_experiments.output import local_timestamp
 from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS
 from cil_experiments.strategies import (
+    build_ewc_cosine_tuning_strategy,
     build_lwf_tuning_strategy,
     build_si_tuning_strategy,
     build_strategy,
@@ -32,6 +33,8 @@ MANUAL_CANDIDATE_METHODS: dict[str, dict[str, Any]] = {
     "si": {"si_lambda": 0.0001, "eps": 0.0000001},
     # LwF 保存上一 Experience 的教师模型，并在当前样本上蒸馏旧类输出。
     "lwf": {"alpha": 1.0, "temperature": 2.0},
+    # EWC 正则共享骨干和已出现的余弦分类权重；参数名在类别扩展前后保持稳定。
+    "ewc_cosine": {"ewc_lambda": 1.0, "mode": "separate"},
 }
 
 
@@ -193,6 +196,13 @@ def run_manual(
             )
         elif method == "lwf":
             bundle = build_lwf_tuning_strategy(
+                data.spec.in_channels,
+                epochs,
+                resolved_device,
+                MANUAL_CANDIDATE_METHODS[method],
+            )
+        elif method == "ewc_cosine":
+            bundle = build_ewc_cosine_tuning_strategy(
                 data.spec.in_channels,
                 epochs,
                 resolved_device,

@@ -21,6 +21,7 @@ from cil_experiments.models import TemporalBackbone, assert_shared_backbone_cont
 from cil_experiments.output import AtomicRunArtifacts
 from cil_experiments.registry import DATASETS, METHODS, ORDERS, SEEDS, validate_order_seed_file
 from cil_experiments.strategies import (
+    build_ewc_cosine_tuning_strategy,
     build_lwf_tuning_strategy,
     build_si_tuning_strategy,
     build_strategy,
@@ -99,6 +100,32 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(bundle.method_plugin.lwf.alpha, 1.0)
         self.assertEqual(bundle.method_plugin.lwf.temperature, 2.0)
 
+    def test_ewc_cosine_is_manual_only_and_keeps_classifier_parameter_names(self):
+        from types import SimpleNamespace
+
+        self.assertNotIn("ewc_cosine", METHODS)
+        bundle = build_ewc_cosine_tuning_strategy(
+            3,
+            1,
+            torch.device("cpu"),
+            {"ewc_lambda": 1.0, "mode": "separate"},
+        )
+        classifier = bundle.strategy.model.classifier
+        classifier.adaptation(SimpleNamespace(classes_in_this_experience=[0, 1, 2]))
+        first_names = set(dict(bundle.strategy.model.named_parameters()))
+        first_output = bundle.strategy.model(torch.zeros(2, 3, 315))
+        classifier.adaptation(SimpleNamespace(classes_in_this_experience=[3]))
+        second_names = set(dict(bundle.strategy.model.named_parameters()))
+        second_output = bundle.strategy.model(torch.zeros(2, 3, 315))
+        self.assertEqual(bundle.method, "ewc_cosine")
+        self.assertIsNone(bundle.phase_plugin)
+        self.assertEqual(bundle.method_plugin.ewc_lambda, 1.0)
+        self.assertEqual(tuple(first_output.shape), (2, 3))
+        self.assertEqual(tuple(second_output.shape), (2, 4))
+        self.assertIn("classifier.fc.weight", first_names)
+        self.assertIn("classifier.fc.weight", second_names)
+        self.assertNotIn("classifier.fc.fc1.weight", second_names)
+
     def test_final_hyperparameters_cover_every_dataset_method(self):
         validate_final_hyperparameter_registry()
         self.assertEqual(set(FINAL_HYPERPARAMETERS), set(DATASETS))
@@ -162,6 +189,7 @@ class ProtocolContractTests(unittest.TestCase):
             for dataset in DATASETS
             for method in ("si", "lwf")
         }
+        candidate_entries.add("spike__ewc_cosine.py")
         actual = {path.name for path in manual_root.glob("*__*.py")}
         self.assertEqual(actual, formal_entries | candidate_entries)
         for path in manual_root.glob("*__*.py"):
