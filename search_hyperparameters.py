@@ -16,15 +16,15 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 
-from cil_experiments.data import NpyTimeSeriesDataset, validate_source_files
 from cil_experiments.flops import PhaseFlopProfiler
 from cil_experiments.metrics import compute_cil_metrics
-from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS, project_order
+from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS
 from cil_experiments.output import local_timestamp
 from cil_experiments.runner import _sync, _train_experience, run_one, set_determinism
 from cil_experiments.strategies import build_strategy
+from cil_experiments.validation import build_internal_validation_benchmark
 
 
 VALIDATION_FRACTION = 0.2
@@ -57,62 +57,16 @@ SEARCH_CANDIDATES: dict[str, list[dict[str, Any]]] = {
 }
 
 
-class IndexedDataset(Dataset):
-    def __init__(self, source: Dataset, indices: list[int]):
-        self.source = source
-        self.indices = tuple(int(index) for index in indices)
-        self.targets = [int(source.targets[index]) for index in self.indices]
-
-    def __len__(self) -> int:
-        return len(self.indices)
-
-    def __getitem__(self, index: int):
-        return self.source[self.indices[index]]
-
-
 def _internal_train_validation_benchmark(
     dataset_root: Path, dataset_name: str, validation_seed: int
 ):
-    from avalanche.benchmarks.scenarios.deprecated.generators import nc_benchmark
-
-    spec = DATASETS[dataset_name]
-    validate_source_files(dataset_root, spec)
-    raw_order = project_order(1, spec.num_classes)
-    label_map = {raw: internal for internal, raw in enumerate(raw_order)}
-    source = NpyTimeSeriesDataset(dataset_root / spec.train_x, dataset_root / spec.train_y, label_map)
-    targets = np.asarray(source.targets, dtype=np.int64)
-    rng = np.random.default_rng(validation_seed)
-    train_indices: list[int] = []
-    validation_indices: list[int] = []
-    split_counts: dict[str, dict[str, int]] = {}
-    for class_id in range(spec.num_classes):
-        indices = np.flatnonzero(targets == class_id)
-        if len(indices) < 2:
-            raise ValueError(f"Class {class_id} cannot be split into train and validation")
-        indices = rng.permutation(indices)
-        validation_count = max(1, int(round(len(indices) * VALIDATION_FRACTION)))
-        validation_count = min(validation_count, len(indices) - 1)
-        validation_indices.extend(int(v) for v in indices[:validation_count])
-        train_indices.extend(int(v) for v in indices[validation_count:])
-        split_counts[str(class_id)] = {
-            "train": int(len(indices) - validation_count),
-            "validation": int(validation_count),
-        }
-    train = IndexedDataset(source, sorted(train_indices))
-    validation = IndexedDataset(source, sorted(validation_indices))
-    benchmark = nc_benchmark(
-        train_dataset=train,
-        test_dataset=validation,
-        n_experiences=spec.tasks,
-        task_labels=False,
-        shuffle=False,
-        fixed_class_order=list(range(spec.num_classes)),
-        per_exp_classes={0: 3},
-        class_ids_from_zero_from_first_exp=False,
-        train_transform=None,
-        eval_transform=None,
+    return build_internal_validation_benchmark(
+        dataset_root,
+        dataset_name,
+        validation_seed,
+        validation_fraction=VALIDATION_FRACTION,
+        order_id=1,
     )
-    return benchmark, split_counts
 
 
 def _evaluate_validation_with_flops(model, experiences, device: torch.device):

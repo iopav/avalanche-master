@@ -8,6 +8,8 @@ Edit only the `PARAMETERS`, `ORDER_ID`, `SEED`, `EPOCHS` and `DEVICE` constants 
 conda run -n py310 python manual_tuning\spike__er_ace.py
 ```
 
+`search_spike_fecam.py` is a separate lightweight grid-search helper. It uses a class-stratified 20% split of the Spike training set, never reads the test set for model selection, disables FLOPs accounting, and writes no result file. Edit its grid constants if the selected value lies on a search boundary.
+
 These entries intentionally do not call `PhaseFlopProfiler`, `compute_persistent_storage`, latency measurement or metrics-summary generation. A successful run prints the complete lower-triangular accuracy matrix once, after all training and evaluation have finished. Manual tuning does not save JSON or any other result artifact; a failed run prints the normal traceback and never prints a partial matrix as a completed result.
 
 CPU work is still expected for DataLoader workers, NumPy/JSON processing, Spike bit packing and persistent replay payloads. Model forward, loss, backward, optimizer updates, FeCAM statistics and iCaRL feature extraction use the selected CUDA device.

@@ -162,7 +162,7 @@ class ProtocolContractTests(unittest.TestCase):
             for dataset in DATASETS
             for method in ("si", "lwf")
         }
-        actual = {path.name for path in manual_root.glob("*.py") if path.name != "common.py"}
+        actual = {path.name for path in manual_root.glob("*__*.py")}
         self.assertEqual(actual, formal_entries | candidate_entries)
         for path in manual_root.glob("*__*.py"):
             script = path.read_text(encoding="utf-8")
