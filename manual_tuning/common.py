@@ -19,13 +19,19 @@ if str(PROJECT_ROOT) not in sys.path:
 from cil_experiments.data import build_dataset_bundle
 from cil_experiments.output import local_timestamp
 from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS
-from cil_experiments.strategies import build_si_tuning_strategy, build_strategy
+from cil_experiments.strategies import (
+    build_lwf_tuning_strategy,
+    build_si_tuning_strategy,
+    build_strategy,
+)
 
 TRAINING_KEYS = set(TRAINING_DEFAULTS)
 MANUAL_CANDIDATE_METHODS: dict[str, dict[str, Any]] = {
     # Avalanche 的 SI 包装器要求 si_lambda；eps 使用其源码默认值。
     # 该注册表仅供手工调参，不会进入正式五方法入口。
     "si": {"si_lambda": 0.0001, "eps": 0.0000001},
+    # LwF 保存上一 Experience 的教师模型，并在当前样本上蒸馏旧类输出。
+    "lwf": {"alpha": 1.0, "temperature": 2.0},
 }
 
 
@@ -180,6 +186,13 @@ def run_manual(
     try:
         if method == "si":
             bundle = build_si_tuning_strategy(
+                data.spec.in_channels,
+                epochs,
+                resolved_device,
+                MANUAL_CANDIDATE_METHODS[method],
+            )
+        elif method == "lwf":
+            bundle = build_lwf_tuning_strategy(
                 data.spec.in_channels,
                 epochs,
                 resolved_device,

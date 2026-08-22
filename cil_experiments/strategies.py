@@ -429,6 +429,49 @@ def build_si_tuning_strategy(
     return StrategyBundle("si", strategy, None, method_plugin)
 
 
+def build_lwf_tuning_strategy(
+    in_channels: int,
+    epochs: int,
+    device: torch.device,
+    method_parameters: dict[str, Any],
+) -> StrategyBundle:
+    """构建仅供手工候选试验使用、且不启用 FLOPs 统计的 LwF 策略。"""
+    from avalanche.training.supervised import LwF
+
+    expected = {"alpha", "temperature"}
+    if set(method_parameters) != expected:
+        raise KeyError(
+            "LwF tuning parameters must be exactly "
+            f"{sorted(expected)}, received {sorted(method_parameters)}"
+        )
+    alpha = float(method_parameters["alpha"])
+    temperature = float(method_parameters["temperature"])
+    if alpha < 0:
+        raise ValueError("LwF alpha must be non-negative")
+    if temperature <= 0:
+        raise ValueError("LwF temperature must be positive")
+
+    training_parameters = dict(TRAINING_DEFAULTS)
+    model = TemporalClassifier(in_channels)
+    strategy = LwF(
+        model=model,
+        optimizer=_optimizer(model.parameters(), training_parameters),
+        criterion=nn.CrossEntropyLoss(),
+        alpha=alpha,
+        temperature=temperature,
+        train_mb_size=training_parameters["train_mb_size"],
+        train_epochs=epochs,
+        eval_mb_size=training_parameters["eval_mb_size"],
+        device=device,
+        evaluator=None,
+        eval_every=-1,
+    )
+    method_plugin = next(
+        plugin for plugin in strategy.plugins if plugin.__class__.__name__ == "LwFPlugin"
+    )
+    return StrategyBundle("lwf", strategy, None, method_plugin)
+
+
 def build_strategy(
     method: str,
     in_channels: int,

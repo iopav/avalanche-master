@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import tempfile
 import unittest
@@ -19,7 +20,11 @@ from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
 from cil_experiments.registry import DATASETS, METHODS, ORDERS, SEEDS, validate_order_seed_file
-from cil_experiments.strategies import build_si_tuning_strategy, build_strategy
+from cil_experiments.strategies import (
+    build_lwf_tuning_strategy,
+    build_si_tuning_strategy,
+    build_strategy,
+)
 
 
 PROJECT_ROOT = Path(r"D:\workspace\Avalanche\avalanche-master")
@@ -81,6 +86,19 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertIsNone(bundle.phase_plugin)
         self.assertEqual(bundle.method_plugin.si_lambda, [0.0001])
 
+    def test_lwf_is_available_only_through_the_manual_candidate_builder(self):
+        self.assertNotIn("lwf", METHODS)
+        bundle = build_lwf_tuning_strategy(
+            3,
+            1,
+            torch.device("cpu"),
+            {"alpha": 1.0, "temperature": 2.0},
+        )
+        self.assertEqual(bundle.method, "lwf")
+        self.assertIsNone(bundle.phase_plugin)
+        self.assertEqual(bundle.method_plugin.lwf.alpha, 1.0)
+        self.assertEqual(bundle.method_plugin.lwf.temperature, 2.0)
+
     def test_final_hyperparameters_cover_every_dataset_method(self):
         validate_final_hyperparameter_registry()
         self.assertEqual(set(FINAL_HYPERPARAMETERS), set(DATASETS))
@@ -139,12 +157,26 @@ class ProtocolContractTests(unittest.TestCase):
         formal_entries = {
             f"{dataset}__{method}.py" for dataset in DATASETS for method in METHODS
         }
-        candidate_entries = {f"{dataset}__si.py" for dataset in DATASETS}
+        candidate_entries = {
+            f"{dataset}__{method}.py"
+            for dataset in DATASETS
+            for method in ("si", "lwf")
+        }
         actual = {path.name for path in manual_root.glob("*.py") if path.name != "common.py"}
         self.assertEqual(actual, formal_entries | candidate_entries)
         for path in manual_root.glob("*__*.py"):
             script = path.read_text(encoding="utf-8")
-            self.assertIn('DEVICE = 1, 62, 3, "cuda"', script)
+            tree = ast.parse(script)
+            device_values = []
+            for node in tree.body:
+                if not isinstance(node, ast.Assign):
+                    continue
+                if not node.targets or not isinstance(node.targets[0], ast.Tuple):
+                    continue
+                names = [item.id for item in node.targets[0].elts if isinstance(item, ast.Name)]
+                if "DEVICE" in names and isinstance(node.value, ast.Tuple):
+                    device_values.append(node.value.elts[names.index("DEVICE")].value)
+            self.assertEqual(device_values, ["cuda"], path.name)
             self.assertIn("#", script)
         common = (manual_root / "common.py").read_text(encoding="utf-8")
         self.assertIn("bundle.strategy.train", common)
