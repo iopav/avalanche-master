@@ -54,7 +54,7 @@ def binary_flop(input_shape, other_shape=None, *args, out_shape=None, **kwargs) 
 
 
 def add_like_flop(input_shape, other_shape=None, *args, out_shape=None, **kwargs) -> int:
-    # add/sub with alpha performs a multiply and an addition in the general case.
+    # Locked experiment convention: even 1*a+b counts one multiply plus one add.
     return 2 * _output_numel(out_shape, input_shape)
 
 
@@ -87,7 +87,8 @@ def group_norm_backward_flop(grad_shape, input_shape, *args, out_shape=None, **k
 
 
 def adaptive_pool_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
-    return _numel(input_shape) + _numel(out_shape)
+    # Each output pool of k values uses (k - 1) additions and one division.
+    return _numel(input_shape)
 
 
 def softmax_flop(input_shape, *args, out_shape=None, **kwargs) -> int:

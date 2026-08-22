@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from cil_experiments.data import validate_source_files
-from cil_experiments.flops import profile_single_forward
+from cil_experiments.flops import adaptive_pool_flop, add_like_flop, profile_single_forward
 from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
@@ -52,6 +52,10 @@ class ProtocolContractTests(unittest.TestCase):
         total, detail = profile_single_forward(model, torch.zeros(1, 8))
         self.assertEqual(total, 2 * 1 * 4 * 8 + 4)
         self.assertEqual(detail["flops"], total)
+
+    def test_locked_affine_and_adaptive_average_pool_formulas(self):
+        self.assertEqual(add_like_flop((10,), out_shape=(10,)), 20)
+        self.assertEqual(adaptive_pool_flop((1, 1, 4), out_shape=(1, 1, 1)), 4)
 
     def test_registry_uses_er_ace_with_isolated_buffer(self):
         self.assertEqual(set(METHODS), {"er_ace", "ewc", "cwr_star", "icarl", "fecam"})
