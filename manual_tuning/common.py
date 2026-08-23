@@ -22,6 +22,7 @@ from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS
 from cil_experiments.strategies import (
     build_ewc_cosine_tuning_strategy,
     build_lwf_tuning_strategy,
+    build_mas_tuning_strategy,
     build_si_tuning_strategy,
     build_strategy,
 )
@@ -35,6 +36,8 @@ MANUAL_CANDIDATE_METHODS: dict[str, dict[str, Any]] = {
     "lwf": {"alpha": 1.0, "temperature": 2.0},
     # EWC 正则共享骨干和已出现的余弦分类权重；参数名在类别扩展前后保持稳定。
     "ewc_cosine": {"ewc_lambda": 1.0, "mode": "separate"},
+    # MAS 使用输出范数梯度估计参数重要度，不依赖标签计算重要度。
+    "mas": {"lambda_reg": 1.0, "alpha": 0.5},
 }
 
 
@@ -203,6 +206,13 @@ def run_manual(
             )
         elif method == "ewc_cosine":
             bundle = build_ewc_cosine_tuning_strategy(
+                data.spec.in_channels,
+                epochs,
+                resolved_device,
+                MANUAL_CANDIDATE_METHODS[method],
+            )
+        elif method == "mas":
+            bundle = build_mas_tuning_strategy(
                 data.spec.in_channels,
                 epochs,
                 resolved_device,

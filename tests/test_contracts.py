@@ -23,6 +23,7 @@ from cil_experiments.registry import DATASETS, METHODS, ORDERS, SEEDS, validate_
 from cil_experiments.strategies import (
     build_ewc_cosine_tuning_strategy,
     build_lwf_tuning_strategy,
+    build_mas_tuning_strategy,
     build_si_tuning_strategy,
     build_strategy,
 )
@@ -126,6 +127,19 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertIn("classifier.fc.weight", second_names)
         self.assertNotIn("classifier.fc.fc1.weight", second_names)
 
+    def test_mas_is_available_only_through_the_manual_candidate_builder(self):
+        self.assertNotIn("mas", METHODS)
+        bundle = build_mas_tuning_strategy(
+            3,
+            1,
+            torch.device("cpu"),
+            {"lambda_reg": 1.0, "alpha": 0.5},
+        )
+        self.assertEqual(bundle.method, "mas")
+        self.assertIsNone(bundle.phase_plugin)
+        self.assertEqual(bundle.method_plugin._lambda, 1.0)
+        self.assertEqual(bundle.method_plugin.alpha, 0.5)
+
     def test_final_hyperparameters_cover_every_dataset_method(self):
         validate_final_hyperparameter_registry()
         self.assertEqual(set(FINAL_HYPERPARAMETERS), set(DATASETS))
@@ -190,6 +204,7 @@ class ProtocolContractTests(unittest.TestCase):
             for method in ("si", "lwf")
         }
         candidate_entries.add("spike__ewc_cosine.py")
+        candidate_entries.add("spike__mas.py")
         actual = {path.name for path in manual_root.glob("*__*.py")}
         self.assertEqual(actual, formal_entries | candidate_entries)
         for path in manual_root.glob("*__*.py"):
