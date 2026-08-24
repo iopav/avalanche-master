@@ -236,7 +236,7 @@ def run_manual(
         device_name = (
             torch.cuda.get_device_name(resolved_device) if resolved_device.type == "cuda" else "CPU"
         )
-        matrix = np.full((data.spec.tasks, data.spec.tasks), np.nan, dtype=np.float64)
+        matrix = np.full((data.tasks, data.tasks), np.nan, dtype=np.float64)
         print(
             f"dataset={dataset} method={method} order_id={order_id} seed={seed} "
             f"epochs={epochs} device={resolved_device} device_name={device_name} "
@@ -267,8 +267,8 @@ def run_manual(
         # 手工调参阶段只打印准确率矩阵，不保存 JSON。若以后需要恢复保存功能，
         # 再取消下面原保存流程的注释；正式实验的 JSON 输出不受这里影响。
         # lower = [
-        #     [float(matrix[row, col]) if col <= row else None for col in range(data.spec.tasks)]
-        #     for row in range(data.spec.tasks)
+        #     [float(matrix[row, col]) if col <= row else None for col in range(data.tasks)]
+        #     for row in range(data.tasks)
         # ]
         # payload = {
         #     "dataset": dataset,

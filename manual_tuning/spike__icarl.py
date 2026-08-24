@@ -14,7 +14,7 @@ PARAMETERS = {
 
 # 比较候选参数时保持 ORDER_ID 和 SEED 不变。增大 EPOCHS 可改善表征学习，
 # 但会增加回放计算量和过拟合风险。此脚本必须使用 CUDA。
-ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 3, "cuda"
+ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 50, "cuda"
 
 if __name__ == "__main__":
     run_manual(dataset="spike", method="icarl", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE)

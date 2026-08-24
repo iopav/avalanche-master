@@ -3,7 +3,7 @@ from common import run_manual
 PARAMETERS = {
     # 仅用于第一个 Experience 的 SGD 学习率。增大可更快学习即将冻结的表征，
     # 但过大可能不稳定；减小则可能使首任务表征欠拟合。
-    "learning_rate": 0.1,
+    "learning_rate": 0.003,
     # Tukey 幂变换开关。共享特征向量可能含负值，负数做分数次幂会产生 NaN，
     # 因此当前保持 False。
     "tukey": False,
@@ -22,7 +22,7 @@ PARAMETERS = {
 
 # EPOCHS 只控制第一个 Experience 的训练；后续 Experience 使用冻结的 backbone，
 # 并执行一次统计量计算。比较候选参数时保持 ORDER_ID/SEED 不变，此脚本必须使用 CUDA。
-ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 3, "cuda"
+ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 1, "cuda"
 
 if __name__ == "__main__":
     run_manual(dataset="spike", method="fecam", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE)

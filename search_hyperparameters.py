@@ -144,7 +144,8 @@ def _run_candidate(
     start = time.perf_counter()
     try:
         strategy = build_strategy(method, DATASETS[dataset_name].in_channels, epochs, device, dataset_name)
-        matrix = np.full((DATASETS[dataset_name].tasks, DATASETS[dataset_name].tasks), np.nan)
+        task_count = len(benchmark.train_stream)
+        matrix = np.full((task_count, task_count), np.nan)
         training_flops = 0
         validation_flops = 0
         training_runtime = 0.0

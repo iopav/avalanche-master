@@ -80,11 +80,8 @@ def _run_candidate(candidate: dict[str, object], device: torch.device) -> dict[s
         enable_flop_accounting=False,
         resolved_parameters=parameters,
     )
-    matrix = np.full(
-        (DATASETS["spike"].tasks, DATASETS["spike"].tasks),
-        np.nan,
-        dtype=np.float64,
-    )
+    task_count = len(benchmark.train_stream)
+    matrix = np.full((task_count, task_count), np.nan, dtype=np.float64)
     try:
         for task_index, experience in enumerate(benchmark.train_stream):
             bundle.strategy.train(

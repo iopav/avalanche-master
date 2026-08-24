@@ -25,7 +25,7 @@ def _phase_context(phase_plugin, phase: str):
 
 
 class InstrumentedERACE:
-    """Avalanche ER_ACE loop with mutually exclusive current/replay FLOP phases."""
+    """ER-ACE loop that counts replay samples without splitting merged training FLOPs."""
 
     def _before_training_exp(self, **kwargs):
         with _phase_context(self._cil_phase_plugin, "exemplar_or_sample_selection"):
@@ -50,10 +50,9 @@ class InstrumentedERACE:
             self._before_forward(**kwargs)
             self.mb_output = self.forward()
             if self.replay_loader is not None:
-                with _phase_context(self._cil_phase_plugin, "replay_forward"):
-                    self.mb_buffer_out = avalanche_forward(
-                        self.model, self.mb_buffer_x, self.mb_buffer_tid
-                    )
+                self.mb_buffer_out = avalanche_forward(
+                    self.model, self.mb_buffer_x, self.mb_buffer_tid
+                )
             self._after_forward(**kwargs)
             if self.replay_loader is None:
                 self.loss += self.criterion()
@@ -229,6 +228,11 @@ class InstrumentedICaRLPluginMixin:
         self.pack_binary = pack_binary
         self.packed_memory: list[dict[str, Any]] = []
 
+    def _record_nonflop(self, name: str, calls: int, reason: str, variables: dict[str, Any]) -> None:
+        profiler = self.phase_plugin.profiler if self.phase_plugin is not None else None
+        if profiler is not None:
+            profiler.add_nonflop(name, calls, reason, variables)
+
     def _budget_for(self, class_id: int) -> int:
         q, r = divmod(self.memory_size, len(self.observed_classes))
         index = self.observed_classes.index(class_id)
@@ -236,11 +240,19 @@ class InstrumentedICaRLPluginMixin:
 
     def _materialize_packed(self) -> list[torch.Tensor]:
         materialized = []
+        unpacked_elements = 0
         for item in self.packed_memory:
             shape = tuple(item["shape"])
             count = math_prod(shape)
+            unpacked_elements += count
             unpacked = np.unpackbits(item["data"], bitorder="little", count=count)
             materialized.append(torch.from_numpy(unpacked.reshape(shape).astype(np.float32, copy=False)))
+        self._record_nonflop(
+            "numpy.unpackbits",
+            len(self.packed_memory),
+            "Integer bit unpacking and dtype/data movement have no floating-point FLOP formula.",
+            {"unpacked_elements": unpacked_elements},
+        )
         return materialized
 
     def _pack_current_memory(self) -> None:
@@ -249,12 +261,20 @@ class InstrumentedICaRLPluginMixin:
                 self.x_memory[idx] = tensor.detach().cpu().to(torch.float32).contiguous()
             return
         packed = []
+        packed_elements = 0
         for tensor in self.x_memory:
             array = tensor.detach().cpu().numpy()
+            packed_elements += int(array.size)
             if not np.logical_or(array == 0, array == 1).all():
                 raise ValueError("Spike ICaRL exemplar is not exactly binary and cannot be stored as 1-bit packed")
             bits = np.packbits(array.reshape(-1).astype(np.uint8), bitorder="little")
             packed.append({"data": bits, "shape": tuple(int(v) for v in array.shape)})
+        self._record_nonflop(
+            "numpy.packbits",
+            len(self.x_memory),
+            "Binary comparison, integer conversion and bit packing are non-floating-point work.",
+            {"packed_elements": packed_elements},
+        )
         self.packed_memory = packed
         self.x_memory = []
 

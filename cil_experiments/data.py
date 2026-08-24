@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .registry import DatasetSpec, project_order
+from .registry import DatasetSpec, get_task_groups, get_task_split, project_order
 
 
 class NpyTimeSeriesDataset(Dataset):
@@ -42,6 +42,11 @@ class DatasetBundle:
     inverse_label_map: dict[int, int]
     benchmark: Any
     test_samples_per_task: list[int]
+    task_groups: tuple[tuple[int, ...], ...]
+
+    @property
+    def tasks(self) -> int:
+        return len(self.task_groups)
 
 
 def _validate_binary_spike(path: Path, chunk_samples: int = 64) -> None:
@@ -83,7 +88,9 @@ def build_dataset_bundle(dataset_root: Path, spec: DatasetSpec, order_id: int) -
     from avalanche.benchmarks.scenarios.deprecated.generators import nc_benchmark
 
     validate_source_files(dataset_root, spec)
-    raw_order = project_order(order_id, spec.num_classes)
+    task_groups = get_task_groups(spec.name, order_id)
+    class_split = get_task_split(spec.name, order_id)
+    raw_order = project_order(spec.name, order_id)
     label_map = {raw: internal for internal, raw in enumerate(raw_order)}
     inverse = {internal: raw for raw, internal in label_map.items()}
     train = NpyTimeSeriesDataset(dataset_root / spec.train_x, dataset_root / spec.train_y, label_map)
@@ -91,17 +98,19 @@ def build_dataset_bundle(dataset_root: Path, spec: DatasetSpec, order_id: int) -
     benchmark = nc_benchmark(
         train_dataset=train,
         test_dataset=test,
-        n_experiences=spec.tasks,
+        n_experiences=len(task_groups),
         task_labels=False,
         shuffle=False,
         fixed_class_order=list(range(spec.num_classes)),
-        per_exp_classes={0: 3},
+        per_exp_classes={index: size for index, size in enumerate(class_split)},
         class_ids_from_zero_from_first_exp=False,
         train_transform=None,
         eval_transform=None,
     )
-    expected_per_exp = [3] + [1] * (spec.tasks - 1)
+    expected_per_exp = list(class_split)
     if list(benchmark.n_classes_per_exp) != expected_per_exp:
         raise AssertionError(f"Unexpected task split: {benchmark.n_classes_per_exp}")
     test_counts = [len(exp.dataset) for exp in benchmark.test_stream]
-    return DatasetBundle(spec, train, test, raw_order, label_map, inverse, benchmark, test_counts)
+    return DatasetBundle(
+        spec, train, test, raw_order, label_map, inverse, benchmark, test_counts, task_groups
+    )

@@ -6,7 +6,7 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from .data import NpyTimeSeriesDataset, validate_source_files
-from .registry import DATASETS, project_order
+from .registry import DATASETS, get_task_groups, get_task_split, project_order
 
 
 class IndexedDataset(Dataset):
@@ -39,7 +39,9 @@ def build_internal_validation_benchmark(
         raise ValueError("validation_fraction must be strictly between 0 and 1")
     spec = DATASETS[dataset_name]
     validate_source_files(dataset_root, spec)
-    raw_order = project_order(order_id, spec.num_classes)
+    task_groups = get_task_groups(dataset_name, order_id)
+    class_split = get_task_split(dataset_name, order_id)
+    raw_order = project_order(dataset_name, order_id)
     label_map = {raw: internal for internal, raw in enumerate(raw_order)}
     source = NpyTimeSeriesDataset(dataset_root / spec.train_x, dataset_root / spec.train_y, label_map)
     targets = np.asarray(source.targets, dtype=np.int64)
@@ -66,16 +68,16 @@ def build_internal_validation_benchmark(
     benchmark = nc_benchmark(
         train_dataset=train,
         test_dataset=validation,
-        n_experiences=spec.tasks,
+        n_experiences=len(task_groups),
         task_labels=False,
         shuffle=False,
         fixed_class_order=list(range(spec.num_classes)),
-        per_exp_classes={0: 3},
+        per_exp_classes={index: size for index, size in enumerate(class_split)},
         class_ids_from_zero_from_first_exp=False,
         train_transform=None,
         eval_transform=None,
     )
-    expected_per_experience = [3] + [1] * (spec.tasks - 1)
+    expected_per_experience = list(class_split)
     if list(benchmark.n_classes_per_exp) != expected_per_experience:
         raise AssertionError(f"Unexpected validation task split: {benchmark.n_classes_per_exp}")
     return benchmark, split_counts

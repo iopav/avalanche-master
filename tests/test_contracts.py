@@ -10,7 +10,19 @@ import numpy as np
 import torch
 
 from cil_experiments.data import validate_source_files
-from cil_experiments.flops import adaptive_pool_flop, add_like_flop, profile_single_forward
+from cil_experiments.flops import (
+    adaptive_pool_backward_flop,
+    adaptive_pool_flop,
+    add_like_flop,
+    convolution_backward_flop,
+    ExperienceFlopResult,
+    mse_loss_flop,
+    PhaseFlopProfiler,
+    profile_single_forward,
+    summarize_auxiliary_nonflop_ops,
+    summarize_learning_flops,
+    variance_flop,
+)
 from cil_experiments.final_hyperparameters import (
     FINAL_HYPERPARAMETERS,
     get_final_hyperparameters,
@@ -19,7 +31,16 @@ from cil_experiments.final_hyperparameters import (
 from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
-from cil_experiments.registry import DATASETS, METHODS, ORDERS, SEEDS, validate_order_seed_file
+from cil_experiments.registry import (
+    DATASETS,
+    METHODS,
+    ORDER_IDS,
+    ORDERS_BY_DATASET,
+    SEEDS,
+    get_task_split,
+    project_order,
+    validate_order_registry,
+)
 from cil_experiments.strategies import (
     build_ewc_cosine_tuning_strategy,
     build_lwf_tuning_strategy,
@@ -34,9 +55,17 @@ PROJECT_ROOT = Path(r"D:\workspace\Avalanche\avalanche-master")
 
 class ProtocolContractTests(unittest.TestCase):
     def test_order_seed_registry_matches_source(self):
-        validate_order_seed_file(PROJECT_ROOT.parent / "5order10seeds.txt")
+        validate_order_registry()
         self.assertEqual(tuple(SEEDS), tuple(range(62, 72)))
-        self.assertEqual(len(ORDERS), 5)
+        self.assertEqual(ORDER_IDS, (1, 2, 3, 4, 5))
+        self.assertEqual(sum(len(orders) for orders in ORDERS_BY_DATASET.values()), 15)
+        for dataset_name, spec in DATASETS.items():
+            for order_id in ORDER_IDS:
+                self.assertEqual(
+                    sorted(project_order(dataset_name, order_id)),
+                    list(range(spec.num_classes)),
+                )
+                self.assertEqual(sum(get_task_split(dataset_name, order_id)), spec.num_classes)
 
     def test_source_array_contracts_and_spike_400(self):
         for spec in DATASETS.values():
@@ -66,8 +95,97 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(detail["flops"], total)
 
     def test_locked_affine_and_adaptive_average_pool_formulas(self):
-        self.assertEqual(add_like_flop((10,), out_shape=(10,)), 20)
+        self.assertEqual(add_like_flop((10,), out_shape=(10,)), 10)
+        self.assertEqual(add_like_flop((10,), out_shape=(10,), alpha=-0.1), 20)
         self.assertEqual(adaptive_pool_flop((1, 1, 4), out_shape=(1, 1, 1)), 4)
+        self.assertEqual(adaptive_pool_backward_flop((1, 1, 1), (1, 1, 4)), 4)
+
+    def test_variance_and_mse_have_explicit_arithmetic_formulas(self):
+        self.assertEqual(variance_flop((2, 4), out_shape=()), 32)
+        self.assertEqual(mse_loss_flop((2, 4), (2, 4), 0), 16)
+        self.assertEqual(mse_loss_flop((2, 4), (2, 4), 1), 24)
+
+    def test_convolution_backward_counts_bias_reduction(self):
+        # Conv1d: input [1,2,4], weight [3,2,1], output [1,3,4].
+        # grad-input=48, grad-weight=48, grad-bias=3*(4-1)=9 FLOPs.
+        total = convolution_backward_flop(
+            (1, 3, 4),
+            (1, 2, 4),
+            (3, 2, 1),
+            (3,),
+            (1,),
+            (0,),
+            (1,),
+            False,
+            (0,),
+            1,
+            (True, True, True),
+            out_shape=((1, 2, 4), (3, 2, 1), (3,)),
+        )
+        self.assertEqual(total, 105)
+
+    def test_phase_profiler_separates_conv_forward_loss_and_backward(self):
+        model = torch.nn.Conv1d(2, 3, kernel_size=1, bias=True)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        sample = torch.ones(1, 2, 4, requires_grad=True)
+        profiler = PhaseFlopProfiler()
+        profiler.start()
+        profiler.begin_epoch()
+        profiler.switch("student_current_forward")
+        output = model(sample)
+        profiler.switch("loss_and_regularization")
+        loss = output.sum()
+        profiler.switch("backward")
+        loss.backward()
+        profiler.switch("optimizer_update")
+        optimizer.step()
+        profiler.add_processed_samples(1)
+        profiler.end_epoch()
+        result = profiler.stop(strict=True)
+        self.assertEqual(result.phase_flops["student_current_forward"], 60)
+        self.assertEqual(result.phase_flops["loss_and_regularization"], 11)
+        self.assertEqual(result.phase_flops["backward"], 105)
+        self.assertEqual(result.phase_flops["optimizer_update"], 18)
+        self.assertEqual(result.total_flops, 194)
+
+    def test_learning_flop_summary_is_an_exact_phase_partition(self):
+        result = ExperienceFlopResult(
+            total_flops=204,
+            phase_flops={
+                "student_current_forward": 60,
+                "loss_and_regularization": 11,
+                "backward": 105,
+                "optimizer_update": 18,
+                "replay_forward": 7,
+                "method_specific": 3,
+            },
+            terminal_epoch_flops=204,
+            terminal_epoch_samples=1,
+            terminal_flops_per_sample=204.0,
+            operation_calls={},
+            zero_flop_operations={},
+            custom_formulas=[],
+            manual_supplementary_rules=[],
+            manual_nonflop_operations=[
+                {
+                    "name": "numpy.packbits",
+                    "calls": 1,
+                    "reason": "integer bit packing",
+                    "variables": {"samples": 2},
+                }
+            ],
+        )
+        summary = summarize_learning_flops([result], 100, 60)
+        self.assertEqual(summary["core_training_flops"], 194)
+        self.assertEqual(summary["learning_auxiliary_flops"], 10)
+        self.assertEqual(summary["hyperparameter_search_flops"], 100)
+        self.assertEqual(summary["overall_learning_flops"], 304)
+        self.assertEqual(summary["single_sample_forward_flops"], 60)
+        result.zero_flop_operations = {"aten.reshape": 4, "aten.copy_": 2}
+        nonflop = summarize_auxiliary_nonflop_ops([result])
+        self.assertEqual(nonflop["explicit_nonflop_operator_calls"]["aten.reshape"], 4)
+        self.assertEqual(nonflop["manual_nonflop_operations"][0]["name"], "numpy.packbits")
+        self.assertEqual(nonflop["total_recorded_events"], 7)
 
     def test_registry_uses_er_ace_with_isolated_buffer(self):
         self.assertEqual(set(METHODS), {"er_ace", "ewc", "cwr_star", "icarl", "fecam"})

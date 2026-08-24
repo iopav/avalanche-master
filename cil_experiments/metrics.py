@@ -38,6 +38,14 @@ CIL_KEYS = {
     "forgetting_per_task",
 }
 
+FLOP_KEYS = {
+    "overall_learning_flops",
+    "core_training_flops",
+    "learning_auxiliary_flops",
+    "hyperparameter_search_flops",
+    "single_sample_forward_flops",
+}
+
 
 def compute_cil_metrics(matrix: np.ndarray, test_counts: list[int]) -> dict[str, Any]:
     tasks = matrix.shape[0]
@@ -90,10 +98,63 @@ def validate_summary(summary: dict[str, Any]) -> None:
         "mean_incremental_task_s", "median_incremental_task_s",
     }:
         raise AssertionError("training_runtime keys differ from metrics1.docx")
-    if set(summary["training_operations"]) != {
-        "estimated_cumulative_dense_flops", "task_summed_terminal_flops_per_sample"
-    }:
+    training_operation_keys = {
+        "estimated_cumulative_dense_flops",
+        "task_summed_terminal_flops_per_sample",
+        *FLOP_KEYS,
+        "auxiliary_nonflop_ops",
+    }
+    if set(summary["training_operations"]) != training_operation_keys:
         raise AssertionError("training_operations keys differ from metrics1.docx")
+    flops = summary["training_operations"]
+    for key in FLOP_KEYS:
+        if isinstance(flops[key], bool) or not isinstance(flops[key], int) or flops[key] < 0:
+            raise AssertionError(f"flops.{key} must be a non-negative integer")
+    formal_training_flops = flops["core_training_flops"] + flops["learning_auxiliary_flops"]
+    if summary["training_operations"]["estimated_cumulative_dense_flops"] != formal_training_flops:
+        raise AssertionError("formal training FLOPs differ from core plus learning auxiliary FLOPs")
+    expected_overall = formal_training_flops + flops["hyperparameter_search_flops"]
+    if flops["overall_learning_flops"] != expected_overall:
+        raise AssertionError("overall learning FLOPs identity failed")
+    nonflop = flops["auxiliary_nonflop_ops"]
+    if set(nonflop) != {
+        "explicit_nonflop_operator_calls",
+        "manual_nonflop_operations",
+        "total_recorded_events",
+        "policy",
+    }:
+        raise AssertionError("auxiliary_nonflop_ops keys differ")
+    calls = nonflop["explicit_nonflop_operator_calls"]
+    if not isinstance(calls, dict) or any(
+        not isinstance(name, str)
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 0
+        for name, count in calls.items()
+    ):
+        raise AssertionError("auxiliary_nonflop_ops call counts are invalid")
+    manual_operations = nonflop["manual_nonflop_operations"]
+    if not isinstance(manual_operations, list) or any(
+        not isinstance(operation, dict)
+        or set(operation) != {"name", "calls", "reason", "variables"}
+        or not isinstance(operation["name"], str)
+        or not operation["name"]
+        or isinstance(operation["calls"], bool)
+        or not isinstance(operation["calls"], int)
+        or operation["calls"] < 0
+        or not isinstance(operation["reason"], str)
+        or not operation["reason"]
+        or not isinstance(operation["variables"], dict)
+        for operation in manual_operations
+    ):
+        raise AssertionError("manual auxiliary non-FLOP records are invalid")
+    expected_nonflop_events = sum(calls.values()) + sum(
+        operation["calls"] for operation in manual_operations
+    )
+    if nonflop["total_recorded_events"] != expected_nonflop_events:
+        raise AssertionError("auxiliary_nonflop_ops total_recorded_events mismatch")
+    if not isinstance(nonflop["policy"], str) or not nonflop["policy"]:
+        raise AssertionError("auxiliary_nonflop_ops policy must be a non-empty string")
     if set(summary["persistent_storage"]) != {
         "model_parameter_bytes", "replay_sample_bytes", "replay_label_bytes",
         "auxiliary_bytes", "total_bytes", "total_mib", "pulse_encoding", "label_encoding",

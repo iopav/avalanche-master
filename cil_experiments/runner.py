@@ -12,27 +12,63 @@ import torch
 from torch.utils.data import DataLoader
 
 from .data import DatasetBundle, build_dataset_bundle
-from .flops import PhaseFlopProfiler, profile_single_forward
+from .flops import (
+    PhaseFlopProfiler,
+    profile_single_forward,
+    summarize_auxiliary_nonflop_ops,
+    summarize_learning_flops,
+)
 from .final_hyperparameters import (
     FINAL_HYPERPARAMETERS_LOCKED,
     final_hyperparameter_hash,
     get_final_hyperparameters,
 )
+from .hyperparameter_search_flops import get_hyperparameter_search_flops
 from .metrics import compute_cil_metrics, validate_summary
 from .output import AtomicRunArtifacts
 from .registry import (
     BACKBONE_CONFIG,
     DATASETS,
     METHODS,
-    ORDERS,
+    ORDER_IDS,
+    ORDERS_BY_DATASET,
     SEEDS,
     TRAINING_DEFAULTS,
     dataset_dict,
+    get_task_groups,
+    get_task_split,
     sha256_file,
-    validate_order_seed_file,
 )
 from .storage import compute_persistent_storage
 from .strategies import StrategyBundle, build_strategy
+
+
+def _resolve_hyperparameter_search_flops(
+    project_root: Path,
+    dataset_name: str,
+    method: str,
+    search_provenance: dict[str, Any] | None,
+) -> int:
+    provenance = search_provenance or {}
+    if "hyperparameter_search_flops" in provenance:
+        value = provenance["hyperparameter_search_flops"]
+    elif "search_cost_file" in provenance:
+        cost_path = Path(provenance["search_cost_file"])
+        if not cost_path.is_absolute():
+            cost_path = project_root / cost_path
+        payload = json.loads(cost_path.read_text(encoding="utf-8"))
+        if payload.get("dataset") != dataset_name or payload.get("method") != method:
+            raise ValueError(
+                f"Search-cost identity mismatch for {dataset_name}/{method}: {cost_path}"
+            )
+        value = payload.get("hyperparameter_search_flops")
+    else:
+        return get_hyperparameter_search_flops(dataset_name, method)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            f"hyperparameter_search_flops for {dataset_name}/{method} must be a non-negative integer"
+        )
+    return value
 
 
 def set_determinism(seed: int) -> None:
@@ -167,15 +203,18 @@ def make_config(
     project_root: Path,
     dataset_name: str,
     method: str,
+    order_id: int,
     epochs: int,
     resolved_hyperparameters: dict[str, Any],
     hyperparameter_overrides: dict[str, Any] | None = None,
     search_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     spec = DATASETS[dataset_name]
-    effective_sgd_epochs = [int(epochs)] * spec.tasks
+    task_groups = get_task_groups(dataset_name, order_id)
+    class_split = get_task_split(dataset_name, order_id)
+    effective_sgd_epochs = [int(epochs)] * len(task_groups)
     if method == "fecam":
-        effective_sgd_epochs[1:] = [0] * (spec.tasks - 1)
+        effective_sgd_epochs[1:] = [0] * (len(task_groups) - 1)
     return {
         "schema": "metrics1.docx-compatible-avalanche-cil-v1",
         "dataset": dataset_dict(spec),
@@ -200,13 +239,17 @@ def make_config(
             "augmentation": "none",
             "normalization": "none",
             "technical_input_conversion": "source dtype -> float32; [T,C] -> [C,T]",
-            "first_experience_classes": 3,
-            "later_experience_classes": 1,
+            "classes_per_experience": list(class_split),
             "replay_budget_cap_samples": 2000,
             "flop_backend": "torch.utils.flop_counter.FlopCounterMode",
             "flop_convention": "1 MAC = 2 FLOPs; no post-hoc doubling of PyTorch 2.11 totals",
         },
-        "orders": {str(k): list(v) for k, v in ORDERS.items()},
+        "order_registry_source": "cil_experiments/order_seed_registry.py",
+        "selected_task_groups": [list(group) for group in task_groups],
+        "dataset_orders": {
+            str(key): [list(group) for group in groups]
+            for key, groups in ORDERS_BY_DATASET[dataset_name].items()
+        },
         "seeds": list(SEEDS),
         "final_hyperparameters": {
             "source": "cil_experiments/final_hyperparameters.py",
@@ -215,7 +258,7 @@ def make_config(
             "resolved": dict(resolved_hyperparameters),
             "explicit_diagnostic_overrides": dict(hyperparameter_overrides or {}),
         },
-        "hyperparameter_search": search_provenance or {
+        "hyperparameter_search": {
             "status": (
                 "explicit_diagnostic_hyperparameter_override"
                 if hyperparameter_overrides
@@ -223,6 +266,7 @@ def make_config(
             ),
             "required_trials": 3,
             "test_set_used_for_selection": False,
+            **(search_provenance or {}),
         },
         "summary_null_reasons": {
             "network.total_reused_neurons": "No comparable explicit neuron-reuse mechanism.",
@@ -297,7 +341,7 @@ def run_one(
 ) -> Path:
     if seed not in SEEDS:
         raise ValueError(f"Seed {seed} is not in the locked seed registry")
-    if order_id not in ORDERS:
+    if order_id not in ORDER_IDS:
         raise ValueError(f"Order {order_id} is not in the locked order registry")
     resolved_overrides = dict(parameter_overrides or {})
     if epochs is not None:
@@ -311,17 +355,21 @@ def run_one(
     epochs = int(resolved_hyperparameters["epochs_per_experience"])
     num_workers = int(resolved_hyperparameters["num_workers"])
     set_determinism(seed)
-    order_file = project_root.parent / "5order10seeds.txt"
-    validate_order_seed_file(order_file)
     data = build_dataset_bundle(dataset_root, DATASETS[dataset_name], order_id)
+    hyperparameter_search_flops = _resolve_hyperparameter_search_flops(
+        project_root, dataset_name, method, search_provenance
+    )
+    resolved_search_provenance = dict(search_provenance or {})
+    resolved_search_provenance["hyperparameter_search_flops"] = hyperparameter_search_flops
     config = make_config(
         project_root,
         dataset_name,
         method,
+        order_id,
         epochs,
         resolved_hyperparameters,
         resolved_overrides or None,
-        search_provenance,
+        resolved_search_provenance,
     )
 
     with AtomicRunArtifacts(result_root, dataset_name, method, order_id, seed, config, overwrite) as artifacts:
@@ -373,7 +421,7 @@ def run_one(
             dataset_name,
             resolved_parameters=resolved_hyperparameters,
         )
-        matrix = np.full((data.spec.tasks, data.spec.tasks), np.nan, dtype=np.float64)
+        matrix = np.full((data.tasks, data.tasks), np.nan, dtype=np.float64)
         task_wall: list[float] = []
         task_gpu: list[float] = []
         task_peaks: list[float] = []
@@ -427,10 +475,15 @@ def run_one(
         cil = compute_cil_metrics(matrix, data.test_samples_per_task)
         total_s = float(sum(task_wall))
         incremental = task_wall[1:]
+        flop_summary = summarize_learning_flops(
+            task_flops,
+            hyperparameter_search_flops,
+            single_forward_flops,
+        )
         summary = {
             "method": METHODS[method]["display_name"],
             "seed": int(seed),
-            "tasks": int(data.spec.tasks),
+            "tasks": int(data.tasks),
             "cil_performance": cil,
             "network": {
                 "final_hidden_neurons": 64,
@@ -448,6 +501,8 @@ def run_one(
             "training_operations": {
                 "estimated_cumulative_dense_flops": int(sum(item.total_flops for item in task_flops)),
                 "task_summed_terminal_flops_per_sample": float(sum(terminal_values)),
+                **flop_summary,
+                "auxiliary_nonflop_ops": summarize_auxiliary_nonflop_ops(task_flops),
             },
             "persistent_storage": storage,
             "inference": {"final_latency_ms_per_sample": float(latency)},
@@ -463,8 +518,8 @@ def run_one(
         log.info("persistent_storage=%s", json.dumps(storage, ensure_ascii=False, sort_keys=True))
         log.info("summary=%s", json.dumps(summary, ensure_ascii=False, sort_keys=True))
         lower_triangular = [
-            [float(matrix[row, col]) if col <= row else None for col in range(data.spec.tasks)]
-            for row in range(data.spec.tasks)
+            [float(matrix[row, col]) if col <= row else None for col in range(data.tasks)]
+            for row in range(data.tasks)
         ]
         accuracy_matrix = {
             "dataset": dataset_name,
@@ -472,7 +527,7 @@ def run_one(
             "order_id": int(order_id),
             "seed": int(seed),
             "timestamp": artifacts.timestamp,
-            "tasks": int(data.spec.tasks),
+            "tasks": int(data.tasks),
             "orientation": "row=train experience end; column=evaluated test experience",
             "upper_triangle": "null because the corresponding class experience had not been learned yet",
             "test_samples_per_task": [int(value) for value in data.test_samples_per_task],

@@ -13,7 +13,13 @@ from cil_experiments.flops import profile_single_forward
 from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
-from cil_experiments.registry import DATASETS, ORDERS, SEEDS, validate_order_seed_file
+from cil_experiments.registry import (
+    DATASETS,
+    ORDER_IDS,
+    ORDERS_BY_DATASET,
+    SEEDS,
+    validate_order_registry,
+)
 
 
 PROJECT_ROOT = Path(r"D:\workspace\Avalanche\avalanche-master")
@@ -21,9 +27,10 @@ PROJECT_ROOT = Path(r"D:\workspace\Avalanche\avalanche-master")
 
 class ProtocolContractTests(unittest.TestCase):
     def test_order_seed_registry_matches_source(self):
-        validate_order_seed_file(PROJECT_ROOT.parent / "5order10seeds.txt")
+        validate_order_registry()
         self.assertEqual(tuple(SEEDS), tuple(range(62, 72)))
-        self.assertEqual(len(ORDERS), 5)
+        self.assertEqual(ORDER_IDS, (1, 2, 3, 4, 5))
+        self.assertEqual(sum(len(orders) for orders in ORDERS_BY_DATASET.values()), 15)
 
     def test_source_array_contracts_and_spike_400(self):
         for spec in DATASETS.values():
