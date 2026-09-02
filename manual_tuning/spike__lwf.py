@@ -6,15 +6,15 @@ PARAMETERS = {
     "learning_rate": 0.01,
     # 旧类知识蒸馏损失的权重。增大可加强旧类输出约束，但过大会妨碍新类学习；
     # 建议先固定 temperature=2，比较 0.5、1.0、2.0、5.0。
-    "alpha": 100,
+    "alpha": 5,
     # 蒸馏 softmax 温度。增大可软化教师分布并暴露更多旧类相对关系，
     # 但过高会使分布过平；先使用 2.0，必要时再比较 4.0。
-    "temperature": 50,
+    "temperature": 2,
 }
 
 # ORDER_ID 决定类别到达顺序，SEED 控制训练随机性；比较候选参数时保持二者不变。
 # EPOCHS 与轻量协议一致，DEVICE 固定为 CUDA。手工调参不会计算 FLOPs 或保存 JSON。
-ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 3, "cuda"
+ORDER_ID, SEED, EPOCHS, DEVICE = 6, 62, 10, "cuda"
 
 if __name__ == "__main__":
     run_manual(dataset="spike", method="lwf", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE)

@@ -12,34 +12,13 @@ from torch.utils.flop_counter import FlopCounterMode
 
 
 PHASES = (
-    "student_current_forward",
-    "replay_forward",
-    "teacher_distillation_forward",
-    "loss_and_regularization",
-    "backward",
-    "optimizer_update",
-    "exemplar_or_sample_selection",
-    "prototype_and_class_statistics",
-    "method_specific",
-    "manual_supplement",
+    "core_training",
+    "learning_auxiliary",
     "single_sample_forward",
 )
 
-CORE_TRAINING_PHASES = (
-    "student_current_forward",
-    "loss_and_regularization",
-    "backward",
-    "optimizer_update",
-)
-
-LEARNING_AUXILIARY_PHASES = (
-    "replay_forward",
-    "teacher_distillation_forward",
-    "exemplar_or_sample_selection",
-    "prototype_and_class_statistics",
-    "method_specific",
-    "manual_supplement",
-)
+CORE_TRAINING_PHASES = ("core_training",)
+LEARNING_AUXILIARY_PHASES = ("learning_auxiliary",)
 
 
 def _is_shape(value: Any) -> bool:
@@ -113,6 +92,33 @@ def group_norm_backward_flop(grad_shape, input_shape, *args, out_shape=None, **k
     return 15 * _numel(input_shape)
 
 
+def batch_norm_flop(
+    input_shape, weight_shape=None, bias_shape=None, running_mean_shape=None,
+    running_var_shape=None, training=True, *args, out_shape=None, **kwargs
+) -> int:
+    # Explicit dense approximation. Training computes batch mean/variance,
+    # normalization, affine transform and running-stat updates; evaluation only
+    # normalizes with stored statistics and applies the affine transform.
+    return (8 if bool(training) else 4) * _numel(input_shape)
+
+
+def batch_norm_backward_flop(
+    grad_shape, input_shape, weight_shape=None, running_mean_shape=None,
+    running_var_shape=None, save_mean_shape=None, save_invstd_shape=None,
+    train=True, eps=1e-5, output_mask=None, *args, out_shape=None, **kwargs
+) -> int:
+    return 15 * _numel(input_shape)
+
+
+def batch_norm_eval_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
+    return 4 * _numel(input_shape)
+
+
+def xlogy_flop(input_shape, other_shape=None, *args, out_shape=None, **kwargs) -> int:
+    # x * log(y): one logarithm and one multiplication per broadcast output.
+    return 2 * _output_numel(out_shape, input_shape)
+
+
 def _adaptive_pool_contributions(input_shape: Any, output_shape: Any) -> int:
     if not _is_shape(input_shape) or not _is_shape(output_shape):
         return 0
@@ -144,13 +150,37 @@ def adaptive_pool_backward_flop(grad_shape, input_shape, *args, out_shape=None, 
     return contributions + max(0, contributions - _numel(input_shape))
 
 
+def _reduction_group_count(shape, args, kwargs) -> int:
+    dim = args[0] if args and isinstance(args[0], int) else kwargs.get("dim", -1)
+    dim = int(dim) % len(shape)
+    return max(1, _numel(shape) // max(1, int(shape[dim])))
+
+
 def softmax_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
-    # max subtraction, exponentiation, summation and division.
+    # Max selection is comparison work. Each reduction group performs k
+    # subtractions, k exponentials, k-1 additions and k divisions.
+    groups = _reduction_group_count(input_shape, args, kwargs)
+    return 4 * _numel(input_shape) - groups
+
+
+def log_softmax_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
+    # Stable log-softmax adds one logarithm per group in place of the softmax
+    # division saving, for exactly 4*k FLOPs per group.
     return 4 * _numel(input_shape)
 
 
 def softmax_backward_flop(grad_shape, output_shape, *args, out_shape=None, **kwargs) -> int:
-    return 4 * _numel(output_shape)
+    # Per reduction group: k products, k-1 additions, k subtractions and k products.
+    groups = _reduction_group_count(output_shape, args, kwargs)
+    return 4 * _numel(output_shape) - groups
+
+
+def logsumexp_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
+    # Max selection is comparison work under this protocol. For each reduction
+    # group: k subtracts + k exponentials + (k-1) additions + one logarithm
+    # + one restoration add = 3*k+1 FLOPs.
+    groups = max(1, _numel(out_shape))
+    return 3 * _numel(input_shape) + groups
 
 
 def _loss_reduction_flops(elements: int, reduction: int) -> int:
@@ -253,7 +283,7 @@ def convolution_backward_flop(
     out_shape=None,
     **kwargs,
 ) -> int:
-    """Convolution backward under the same 1 MAC = 2 FLOPs convention."""
+    """Convolution backward under the same 1 MAC = 2 FLOPs convention.尽管在这里接受了group，但是不支持group>1的情况，无意外情况应该用不到，懒得写了8.25"""
 
     def transpose_channels(shape):
         return [shape[1], shape[0], *shape[2:]]
@@ -376,13 +406,22 @@ def build_custom_mapping() -> dict[Any, Callable[..., int]]:
         add(name, norm_flop)
     add("native_group_norm", group_norm_flop)
     add("native_group_norm_backward", group_norm_backward_flop)
+    add("native_batch_norm", batch_norm_flop)
+    add("_native_batch_norm_legit", batch_norm_flop)
+    add("_native_batch_norm_legit_functional", batch_norm_flop)
+    add("_native_batch_norm_legit_no_training", batch_norm_eval_flop)
+    add("native_batch_norm_backward", batch_norm_backward_flop)
+    add("native_layer_norm", group_norm_flop)
+    add("native_layer_norm_backward", group_norm_backward_flop)
+    add("xlogy", xlogy_flop)
     add("adaptive_avg_pool1d", adaptive_pool_flop)
     add("adaptive_avg_pool2d", adaptive_pool_flop)
     add("_adaptive_avg_pool2d_backward", adaptive_pool_backward_flop)
     add("_softmax", softmax_flop)
-    add("_log_softmax", softmax_flop)
+    add("_log_softmax", log_softmax_flop)
     add("_softmax_backward_data", softmax_backward_flop)
     add("_log_softmax_backward_data", softmax_backward_flop)
+    add("logsumexp", logsumexp_flop)
     add("nll_loss_forward", nll_loss_forward_flop)
     add("nll_loss_backward", nll_loss_backward_flop)
     add("binary_cross_entropy", binary_cross_entropy_flop)
@@ -408,8 +447,8 @@ ZERO_FLOP_OPERATIONS = {
     "aten.alias", "aten.as_strided", "aten.cat", "aten.clone", "aten.contiguous",
     "aten.copy_", "aten.detach", "aten.empty", "aten.expand", "aten.fill_",
     "aten.flatten", "aten.gather", "aten.index", "aten.index_put", "aten.index_put_", "aten.isfinite", "aten.item",
-    "aten.lift_fresh", "aten.masked_fill", "aten.new_", "aten.ones", "aten.permute",
-    "aten.repeat", "aten.reshape", "aten.scatter", "aten.scatter_", "aten.select", "aten.slice",
+    "aten.lift_fresh", "aten.masked_fill", "aten.masked_fill_", "aten.new_", "aten.ones", "aten.permute",
+    "aten.repeat", "aten.reshape", "aten.roll", "aten.scatter", "aten.scatter_", "aten.select", "aten.slice", "aten.slice_backward",
     "aten.split", "aten.squeeze", "aten.stack", "aten.t", "aten.to", "aten.transpose",
     "aten.unbind", "aten.unsqueeze", "aten.view", "aten.where", "aten.zero_", "aten.zeros",
     "aten._local_scalar_dense", "aten._to_copy", "aten.arange", "aten.scalar_tensor",
@@ -418,12 +457,12 @@ ZERO_FLOP_OPERATIONS = {
     "aten.eq", "aten.ne", "aten.equal", "aten.lt", "aten.le", "aten.gt", "aten.ge",
     "aten.argmax", "aten.argmin", "aten.sort", "aten.topk",
     "aten.unique", "aten._unique", "aten.any", "aten.all", "aten.nonzero",
-    "aten.threshold", "aten.relu", "aten.hardtanh", "aten.dropout", "aten.native_dropout",
+    "aten.threshold", "aten.relu", "aten.relu_", "aten.hardtanh", "aten.dropout", "aten.native_dropout",
     "aten.pin_memory", "aten.record_stream", "aten.is_contiguous",
     "aten.size", "aten.stride", "aten.numel", "aten.dim", "prim.device",
     "aten._pin_memory", "aten.is_pinned", "aten.max", "aten.min", "aten.clamp",
-    "aten.clamp_min", "aten.clamp_max",
-    "aten.set_", "aten.diagonal", "aten.eye",
+    "aten.clamp_min", "aten.clamp_min_", "aten.clamp_max", "aten.clamp_max_",
+    "aten.set_", "aten.diagonal", "aten.eye", "aten._unsafe_view",
 }
 
 ZERO_FLOP_PREFIXES = (
@@ -543,7 +582,7 @@ def summarize_auxiliary_nonflop_ops(
 
 class PhaseFlopProfiler:
     def __init__(self):
-        self.phase = "method_specific"
+        self.phase = "learning_auxiliary"
         self.custom_mapping = build_custom_mapping()
         self.counter = FlopCounterMode(display=False, custom_mapping=self.custom_mapping)
         self.audit = LeafOperatorAuditMode(lambda: self.phase)
@@ -589,7 +628,7 @@ class PhaseFlopProfiler:
             self.switch(previous)
 
     def begin_epoch(self) -> None:
-        self.switch("method_specific")
+        self.switch("learning_auxiliary")
         self._epoch_start_total = self._combined_total()
         self._epoch_processed = 0
 
@@ -597,7 +636,7 @@ class PhaseFlopProfiler:
         self._epoch_processed += int(count)
 
     def end_epoch(self) -> None:
-        self.switch("method_specific")
+        self.switch("learning_auxiliary")
         self._last_epoch_flops = self._combined_total() - self._epoch_start_total
         self._last_epoch_samples = self._epoch_processed
         self._last_epoch_end_total = self._combined_total()
@@ -629,7 +668,7 @@ class PhaseFlopProfiler:
     def stop(self, strict: bool = True) -> ExperienceFlopResult:
         if not self._started:
             raise RuntimeError("FLOP profiler was not started")
-        self.switch("method_specific")
+        self.switch("learning_auxiliary")
         counter_registry = set(self.counter.flop_registry)
         self.counter.__exit__(None, None, None)
         self.audit.__exit__(None, None, None)
@@ -655,7 +694,7 @@ class PhaseFlopProfiler:
             self.phase_flops[phase] += value
         total = int(sum(self.phase_flops.values()))
         post_epoch = total - self._last_epoch_end_total
-        terminal = self._last_epoch_flops + max(0, post_epoch)
+        terminal = self._last_epoch_flops + max(0, post_epoch) #最后一个epoch之后还有额外的flops需要被计入8.29
         if self._last_epoch_samples <= 0:
             raise RuntimeError("Terminal epoch processed-sample count is zero")
         calls_json = {
@@ -713,27 +752,23 @@ class FlopPhasePlugin:
 
     def before_forward(self, strategy, **kwargs):
         if self.profiler:
-            self.profiler.switch("student_current_forward")
+            self.profiler.switch("core_training")
 
     def after_forward(self, strategy, **kwargs):
-        if self.profiler:
-            self.profiler.switch("loss_and_regularization")
+        pass
 
     def before_backward(self, strategy, **kwargs):
-        if self.profiler:
-            self.profiler.switch("backward")
+        pass
 
     def after_backward(self, strategy, **kwargs):
-        if self.profiler:
-            self.profiler.switch("method_specific")
+        pass
 
     def before_update(self, strategy, **kwargs):
-        if self.profiler:
-            self.profiler.switch("optimizer_update")
+        pass
 
     def after_update(self, strategy, **kwargs):
         if self.profiler:
-            self.profiler.switch("method_specific")
+            self.profiler.switch("learning_auxiliary")
 
     def after_training_iteration(self, strategy, **kwargs):
         if self.profiler:
@@ -756,23 +791,37 @@ def make_flop_phase_plugin():
 def profile_single_forward(model, sample: torch.Tensor) -> tuple[int, dict[str, Any]]:
     profiler = PhaseFlopProfiler()
     profiler.phase = "single_sample_forward"
-    profiler.start()
-    with torch.no_grad():
-        model(sample)
-    # Single-forward profiling has no epoch denominator, so close manually.
-    profiler.switch("single_sample_forward")
-    registry = set(profiler.counter.flop_registry)
-    profiler.counter.__exit__(None, None, None)
-    profiler.audit.__exit__(None, None, None)
-    profiler._started = False
-    unknown = [str(op) for calls in profiler.audit.calls.values() for op in calls if op not in registry and not is_explicit_zero_flop(op)]
-    if unknown:
-        raise RuntimeError(f"Unsupported operators in single-sample forward: {sorted(set(unknown))}")
-    total = int(sum(profiler.phase_flops.values()))
-    detail = {
-        "flops": total,
-        "operation_calls": {
-            phase: {str(op): int(n) for op, n in calls.items()} for phase, calls in profiler.audit.calls.items()
-        },
-    }
-    return total, detail
+    was_training = model.training
+    model.eval()
+    try:
+        profiler.start()
+        with torch.no_grad():
+            model(sample)
+        # Single-forward profiling has no epoch denominator, so close manually.
+        profiler.switch("single_sample_forward")
+        registry = set(profiler.counter.flop_registry)
+        profiler.counter.__exit__(None, None, None)
+        profiler.audit.__exit__(None, None, None)
+        profiler._started = False
+        unknown = [
+            str(op)
+            for calls in profiler.audit.calls.values()
+            for op in calls
+            if op not in registry and not is_explicit_zero_flop(op)
+        ]
+        if unknown:
+            raise RuntimeError(
+                f"Unsupported operators in single-sample forward: {sorted(set(unknown))}"
+            )
+        total = int(sum(profiler.phase_flops.values()))
+        detail = {
+            "flops": total,
+            "operation_calls": {
+                phase: {str(op): int(n) for op, n in calls.items()}
+                for phase, calls in profiler.audit.calls.items()
+            },
+        }
+        return total, detail
+    finally:
+        profiler.abort()
+        model.train(was_training)

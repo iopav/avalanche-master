@@ -7,19 +7,36 @@ from pathlib import Path
 
 import torch
 
-from .registry import METHODS
+from .registry import FORMAL_METHODS
 from .runner import run_one
 
 
 def run_dataset_cli(dataset_name: str) -> int:
     parser = argparse.ArgumentParser(description=f"Run auditable {dataset_name} CIL experiments")
-    parser.add_argument("--methods", nargs="+", default=list(METHODS), choices=list(METHODS))
+    parser.add_argument(
+        "--methods", nargs="+", default=list(FORMAL_METHODS), choices=list(FORMAL_METHODS)
+    )
+    parser.add_argument(
+        "--backbone",
+        help=(
+            "Optional registered backbone ID for all methods, including TagFex. "
+            "Compatibility is validated by the backbone factory."
+        ),
+    )
     parser.add_argument("--order-ids", nargs="+", type=int, default=[1])
     parser.add_argument("--seeds", nargs="+", type=int, default=[62])
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--output-root", type=Path)
+    parser.add_argument(
+        "--skip-intransigence",
+        action="store_true",
+        help=(
+            "Run without a matching Joint artifact. The summary keeps "
+            "cil_performance.intransigence=null and is not eligible for final aggregation."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     project_root = args.project_root.resolve()
@@ -43,6 +60,8 @@ def run_dataset_cli(dataset_name: str) -> int:
                         None,
                         device,
                         overwrite=args.overwrite,
+                        backbone_id=args.backbone,
+                        compute_intransigence_enabled=not args.skip_intransigence,
                     )
                     print(path)
         return 0

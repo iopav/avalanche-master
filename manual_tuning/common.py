@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from cil_experiments.data import build_dataset_bundle
 from cil_experiments.output import local_timestamp
-from cil_experiments.registry import DATASETS, METHODS, TRAINING_DEFAULTS
+from cil_experiments.registry import DATASETS, DEFAULT_BACKBONES, METHODS, TRAINING_DEFAULTS
 from cil_experiments.strategies import (
     build_ewc_cosine_tuning_strategy,
     build_lwf_tuning_strategy,
@@ -30,7 +30,7 @@ from cil_experiments.strategies import (
 TRAINING_KEYS = set(TRAINING_DEFAULTS)
 MANUAL_CANDIDATE_METHODS: dict[str, dict[str, Any]] = {
     # Avalanche 的 SI 包装器要求 si_lambda；eps 使用其源码默认值。
-    # 该注册表仅供手工调参，不会进入正式五方法入口。
+    # 该注册表仅供手工调参，不会进入正式六方法入口。
     "si": {"si_lambda": 0.0001, "eps": 0.0000001},
     # LwF 保存上一 Experience 的教师模型，并在当前样本上蒸馏旧类输出。
     "lwf": {"alpha": 1.0, "temperature": 2.0},
@@ -67,7 +67,9 @@ def _evaluate(model, experience, device: torch.device, batch_size: int) -> float
             non_blocking = device.type == "cuda"
             x = batch[0].to(device, non_blocking=non_blocking)
             y = batch[1].to(device, non_blocking=non_blocking)
-            prediction = torch.argmax(model(x), dim=1)
+            output = model(x)
+            logits = output["logits"] if isinstance(output, dict) else output
+            prediction = torch.argmax(logits, dim=1)
             correct += int((prediction == y).sum().item())
             total += int(y.numel())
     if was_training:
@@ -173,6 +175,8 @@ def run_manual(
     seed: int = 62,
     epochs: int = 3,
     device: str | None = "cuda",
+    backbone_id: str | None = None,
+    use_mini: bool = True,
 ) -> np.ndarray:
     """运行不含 FLOPs、存储、延迟和汇总指标的手工调参训练与评估路径。"""
     if dataset not in DATASETS:
@@ -187,7 +191,17 @@ def run_manual(
             resolved_device = torch.device("cuda", torch.cuda.current_device())
         torch.cuda.set_device(resolved_device)
     _set_determinism(seed)
-    data = build_dataset_bundle(PROJECT_ROOT / "dataset", DATASETS[dataset], order_id)
+    resolved_backbone_id = backbone_id or DEFAULT_BACKBONES.get(
+        method, DEFAULT_BACKBONES["ewc"]
+    )
+    dataset_root = PROJECT_ROOT / ("dataset_mini" if use_mini else "dataset")
+    data = build_dataset_bundle(
+        dataset_root,
+        DATASETS[dataset],
+        order_id,
+        input_view="image",
+        allow_variable_samples=use_mini,
+    )
     snapshots = _apply_parameters(method, parameters)
     try:
         if method == "si":
@@ -196,6 +210,9 @@ def run_manual(
                 epochs,
                 resolved_device,
                 MANUAL_CANDIDATE_METHODS[method],
+                backbone_id=resolved_backbone_id,
+                dataset_name=dataset,
+                model_input_shape=data.model_input_shape,
             )
         elif method == "lwf":
             bundle = build_lwf_tuning_strategy(
@@ -203,6 +220,9 @@ def run_manual(
                 epochs,
                 resolved_device,
                 MANUAL_CANDIDATE_METHODS[method],
+                backbone_id=resolved_backbone_id,
+                dataset_name=dataset,
+                model_input_shape=data.model_input_shape,
             )
         elif method == "ewc_cosine":
             bundle = build_ewc_cosine_tuning_strategy(
@@ -210,6 +230,9 @@ def run_manual(
                 epochs,
                 resolved_device,
                 MANUAL_CANDIDATE_METHODS[method],
+                backbone_id=resolved_backbone_id,
+                dataset_name=dataset,
+                model_input_shape=data.model_input_shape,
             )
         elif method == "mas":
             bundle = build_mas_tuning_strategy(
@@ -217,6 +240,9 @@ def run_manual(
                 epochs,
                 resolved_device,
                 MANUAL_CANDIDATE_METHODS[method],
+                backbone_id=resolved_backbone_id,
+                dataset_name=dataset,
+                model_input_shape=data.model_input_shape,
             )
         else:
             bundle = build_strategy(
@@ -226,6 +252,8 @@ def run_manual(
                 resolved_device,
                 dataset,
                 enable_flop_accounting=False,
+                backbone_id=resolved_backbone_id,
+                model_input_shape=data.model_input_shape,
             )
         bundle.strategy.model.to(resolved_device)
         parameter_devices = {parameter.device.type for parameter in bundle.strategy.model.parameters()}
@@ -240,6 +268,7 @@ def run_manual(
         print(
             f"dataset={dataset} method={method} order_id={order_id} seed={seed} "
             f"epochs={epochs} device={resolved_device} device_name={device_name} "
+            f"backbone_id={resolved_backbone_id} data_variant={'mini_5pct' if use_mini else 'full'} "
             f"parameters={parameters}",
             flush=True,
         )

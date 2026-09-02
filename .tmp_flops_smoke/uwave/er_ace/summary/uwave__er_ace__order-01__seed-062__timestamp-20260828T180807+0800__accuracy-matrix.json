@@ -1,0 +1,68 @@
+{
+  "dataset": "uwave",
+  "method": "er_ace",
+  "order_id": 1,
+  "seed": 62,
+  "timestamp": "20260828T180807+0800",
+  "tasks": 6,
+  "orientation": "row=train experience end; column=evaluated test experience",
+  "upper_triangle": "null because the corresponding class experience had not been learned yet",
+  "test_samples_per_task": [
+    341,
+    127,
+    100,
+    112,
+    110,
+    106
+  ],
+  "accuracy_matrix_lower_triangular": [
+    [
+      0.3724340175953079,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      0.656891495601173,
+      0.13385826771653545,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      0.36656891495601174,
+      0.0,
+      0.26,
+      null,
+      null,
+      null
+    ],
+    [
+      0.4340175953079179,
+      0.23622047244094488,
+      0.0,
+      0.0,
+      null,
+      null
+    ],
+    [
+      0.0967741935483871,
+      0.9291338582677166,
+      0.81,
+      0.0,
+      0.0,
+      null
+    ],
+    [
+      0.6686217008797654,
+      0.07874015748031496,
+      0.85,
+      0.008928571428571428,
+      0.10909090909090909,
+      0.0
+    ]
+  ]
+}

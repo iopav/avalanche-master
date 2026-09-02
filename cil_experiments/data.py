@@ -32,17 +32,45 @@ class NpyTimeSeriesDataset(Dataset):
         return x, int(self.targets[index])
 
 
+class NpyImageDataset(Dataset):
+    """Read-only NPY-backed image view stored as [N,3,H,W]."""
+
+    def __init__(
+        self, x_path: Path, y_path: Path, label_map: dict[int, int], layout: str
+    ):
+        self.x_path = x_path
+        self.y_path = y_path
+        self._x = np.load(x_path, mmap_mode="r")
+        raw_targets = np.load(y_path)
+        self.targets = [label_map[int(v)] for v in raw_targets.tolist()]
+        self.raw_targets = raw_targets
+        if layout not in {"NCHW", "NHWC"}:
+            raise ValueError(f"Unsupported stored image layout: {layout}")
+        self.layout = layout
+
+    def __len__(self) -> int:
+        return len(self.targets)
+
+    def __getitem__(self, index: int):
+        item = np.array(self._x[index], dtype=np.float32, copy=True)
+        if self.layout == "NHWC":
+            item = np.transpose(item, (2, 0, 1)).copy()
+        return torch.from_numpy(item).contiguous(), int(self.targets[index])
+
+
 @dataclass
 class DatasetBundle:
     spec: DatasetSpec
-    train: NpyTimeSeriesDataset
-    test: NpyTimeSeriesDataset
+    train: Dataset
+    test: Dataset
     raw_order: tuple[int, ...]
     label_map: dict[int, int]
     inverse_label_map: dict[int, int]
     benchmark: Any
     test_samples_per_task: list[int]
     task_groups: tuple[tuple[int, ...], ...]
+    input_view_id: str
+    model_input_shape: tuple[int, ...]
 
     @property
     def tasks(self) -> int:
@@ -58,12 +86,21 @@ def _validate_binary_spike(path: Path, chunk_samples: int = 64) -> None:
             raise ValueError(f"Spike data is not binary 0/1 in {path}: sample values={values[:10]}")
 
 
-def validate_source_files(dataset_root: Path, spec: DatasetSpec) -> None:
+def validate_source_files(
+    dataset_root: Path, spec: DatasetSpec, *, allow_variable_samples: bool = False
+) -> None:
     train_x = np.load(dataset_root / spec.train_x, mmap_mode="r")
     test_x = np.load(dataset_root / spec.test_x, mmap_mode="r")
     train_y = np.load(dataset_root / spec.train_y, mmap_mode="r")
     test_y = np.load(dataset_root / spec.test_y, mmap_mode="r")
-    if tuple(train_x.shape) != spec.train_shape or tuple(test_x.shape) != spec.test_shape:
+    shapes_match = (
+        tuple(train_x.shape[1:]) == tuple(spec.train_shape[1:])
+        and tuple(test_x.shape[1:]) == tuple(spec.test_shape[1:])
+        if allow_variable_samples
+        else tuple(train_x.shape) == spec.train_shape
+        and tuple(test_x.shape) == spec.test_shape
+    )
+    if not shapes_match:
         raise ValueError(
             f"{spec.name} shape mismatch: train={train_x.shape}, test={test_x.shape}; "
             f"expected {spec.train_shape}, {spec.test_shape}"
@@ -84,17 +121,96 @@ def validate_source_files(dataset_root: Path, spec: DatasetSpec) -> None:
         _validate_binary_spike(dataset_root / spec.test_x)
 
 
-def build_dataset_bundle(dataset_root: Path, spec: DatasetSpec, order_id: int) -> DatasetBundle:
+def validate_image_files(
+    dataset_root: Path, spec: DatasetSpec, *, allow_variable_samples: bool = False
+) -> None:
+    for relative_x, relative_y, expected_shape in (
+        (spec.image_train_x, spec.image_train_y, spec.image_train_shape),
+        (spec.image_test_x, spec.image_test_y, spec.image_test_shape),
+    ):
+        x_path = dataset_root / relative_x
+        y_path = dataset_root / relative_y
+        if not x_path.is_file() or not y_path.is_file():
+            raise FileNotFoundError(
+                f"Missing generated image view for {spec.name}: {x_path} or {y_path}. "
+                "Run prepare_image_datasets.py first."
+            )
+        x = np.load(x_path, mmap_mode="r")
+        y = np.load(y_path, mmap_mode="r")
+        shape_matches = (
+            tuple(x.shape[1:]) == tuple(expected_shape[1:])
+            if allow_variable_samples
+            else tuple(x.shape) == expected_shape
+        )
+        if not shape_matches:
+            raise ValueError(f"{spec.name} image shape {x.shape}, expected {expected_shape}")
+        if str(x.dtype) != spec.image_x_dtype:
+            raise ValueError(
+                f"{spec.name} image dtype {x.dtype}, expected {spec.image_x_dtype}"
+            )
+        expected_labels = len(x) if allow_variable_samples else expected_shape[0]
+        if len(y) != expected_labels:
+            raise ValueError(f"{spec.name} image labels have length {len(y)}")
+
+
+def build_dataset_bundle(
+    dataset_root: Path,
+    spec: DatasetSpec,
+    order_id: int,
+    input_view: str = "temporal",
+    allow_variable_samples: bool = False,
+) -> DatasetBundle:
     from avalanche.benchmarks.scenarios.deprecated.generators import nc_benchmark
 
-    validate_source_files(dataset_root, spec)
+    validate_source_files(
+        dataset_root, spec, allow_variable_samples=allow_variable_samples
+    )
     task_groups = get_task_groups(spec.name, order_id)
     class_split = get_task_split(spec.name, order_id)
     raw_order = project_order(spec.name, order_id)
     label_map = {raw: internal for internal, raw in enumerate(raw_order)}
     inverse = {internal: raw for raw, internal in label_map.items()}
-    train = NpyTimeSeriesDataset(dataset_root / spec.train_x, dataset_root / spec.train_y, label_map)
-    test = NpyTimeSeriesDataset(dataset_root / spec.test_x, dataset_root / spec.test_y, label_map)
+    if input_view not in {"temporal", "image"}:
+        raise ValueError(f"Unknown input view: {input_view}")
+    if input_view == "image" and spec.name != "spike":
+        validate_image_files(
+            dataset_root, spec, allow_variable_samples=allow_variable_samples
+        )
+        train = NpyImageDataset(
+            dataset_root / spec.image_train_x,
+            dataset_root / spec.image_train_y,
+            label_map,
+            spec.image_layout,
+        )
+        test = NpyImageDataset(
+            dataset_root / spec.image_test_x,
+            dataset_root / spec.image_test_y,
+            label_map,
+            spec.image_layout,
+        )
+        model_input_shape = (
+            tuple(int(value) for value in spec.image_train_shape[1:])
+            if spec.image_layout == "NCHW"
+            else (
+                int(spec.image_train_shape[3]),
+                int(spec.image_train_shape[1]),
+                int(spec.image_train_shape[2]),
+            )
+        )
+        input_view_id = f"{spec.name}_stored_rgb_image_v1"
+    else:
+        train = NpyTimeSeriesDataset(
+            dataset_root / spec.train_x, dataset_root / spec.train_y, label_map
+        )
+        test = NpyTimeSeriesDataset(
+            dataset_root / spec.test_x, dataset_root / spec.test_y, label_map
+        )
+        model_input_shape = (spec.in_channels, spec.timesteps)
+        input_view_id = (
+            "spike_raw_binary_to_rgb160_runtime_v1"
+            if input_view == "image" and spec.name == "spike"
+            else f"{spec.name}_raw_temporal_v1"
+        )
     benchmark = nc_benchmark(
         train_dataset=train,
         test_dataset=test,
@@ -112,5 +228,15 @@ def build_dataset_bundle(dataset_root: Path, spec: DatasetSpec, order_id: int) -
         raise AssertionError(f"Unexpected task split: {benchmark.n_classes_per_exp}")
     test_counts = [len(exp.dataset) for exp in benchmark.test_stream]
     return DatasetBundle(
-        spec, train, test, raw_order, label_map, inverse, benchmark, test_counts, task_groups
+        spec,
+        train,
+        test,
+        raw_order,
+        label_map,
+        inverse,
+        benchmark,
+        test_counts,
+        task_groups,
+        input_view_id,
+        model_input_shape,
     )

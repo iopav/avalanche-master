@@ -10,9 +10,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .registry import canonical_hash
-
-
 def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False, allow_nan=False) + "\n"
 
@@ -45,7 +42,6 @@ class AtomicRunArtifacts:
         self.config_path = self.method_root / f"{stem}__config.json"
         self.overwrite = overwrite
         self.config = dict(config)
-        self.config["config_hash"] = canonical_hash(config)
         self.temp_dir: Path | None = None
         self.temp_log: Path | None = None
         self.logger: logging.Logger | None = None

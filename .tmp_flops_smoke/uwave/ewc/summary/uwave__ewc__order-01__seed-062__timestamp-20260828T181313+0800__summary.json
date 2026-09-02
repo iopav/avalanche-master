@@ -1,0 +1,109 @@
+{
+  "method": "EWC",
+  "seed": 62,
+  "tasks": 6,
+  "cil_performance": {
+    "average_incremental_accuracy": 0.2602926551572112,
+    "final_average_accuracy": 0.11830357142857142,
+    "average_forgetting": 0.9384164222873901,
+    "mean_final_accuracy_loss": 0.9384164222873901,
+    "backward_transfer": -0.9384164222873901,
+    "worst_forgotten_task": 2,
+    "forgetting_mean": 0.9384164222873901,
+    "forgetting_median": 1.0,
+    "forgetting_std": 0.12316715542521992,
+    "forgetting_min": 0.6920821114369502,
+    "forgetting_q25": 1.0,
+    "forgetting_q75": 1.0,
+    "forgetting_max": 1.0,
+    "forgetting_positive_fraction": 1.0,
+    "task_end_seen_accuracy_curve": [
+      0.6920821114369502,
+      0.27136752136752135,
+      0.176056338028169,
+      0.16470588235294117,
+      0.13924050632911392,
+      0.11830357142857142
+    ],
+    "forgetting_per_task": [
+      0.6920821114369502,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "network": {
+    "final_hidden_neurons": 64,
+    "total_new_neurons": 0,
+    "total_reused_neurons": null
+  },
+  "training_runtime": {
+    "total_s": 8.104498600005172,
+    "total_gpu_ms": null,
+    "initial_task_s": 1.8296148999943398,
+    "incremental_tasks_total_s": 6.274883700010832,
+    "mean_incremental_task_s": 1.2549767400021665,
+    "median_incremental_task_s": 1.1864133999915794
+  },
+  "training_operations": {
+    "estimated_cumulative_dense_flops": 234730329405,
+    "task_summed_terminal_flops_per_sample": 393295865.52528685,
+    "overall_learning_flops": 234730329405,
+    "core_training_flops": 117465412400,
+    "learning_auxiliary_flops": 117264917005,
+    "hyperparameter_search_flops": 0,
+    "single_sample_forward_flops": 11053896,
+    "auxiliary_nonflop_ops": {
+      "explicit_nonflop_operator_calls": {
+        "aten._local_scalar_dense": 18,
+        "aten._to_copy": 73,
+        "aten.clone": 9160,
+        "aten.copy_": 78,
+        "aten.detach": 10216,
+        "aten.empty": 30,
+        "aten.expand": 3766,
+        "aten.index_put_": 6,
+        "aten.lift_fresh": 7709,
+        "aten.logical_not": 230,
+        "aten.masked_fill": 460,
+        "aten.ones_like": 230,
+        "aten.random_": 18,
+        "aten.randperm": 12,
+        "aten.relu": 690,
+        "aten.slice": 78,
+        "aten.squeeze": 690,
+        "aten.stack": 230,
+        "aten.t": 2300,
+        "aten.threshold_backward": 690,
+        "aten.transpose": 7164,
+        "aten.uniform_": 12,
+        "aten.unsqueeze": 690,
+        "aten.view": 460,
+        "aten.zeros": 283,
+        "profiler._record_function_enter_new": 587,
+        "profiler._record_function_exit": 587
+      },
+      "manual_nonflop_operations": [],
+      "total_recorded_events": 46467,
+      "policy": "Only comparisons, indexing, shape/view, data movement, integer/bit operations and other explicitly documented non-floating-point operations are listed here; unknown computational operators still abort the run."
+    }
+  },
+  "persistent_storage": {
+    "model_parameter_bytes": 404768,
+    "replay_sample_bytes": 0,
+    "replay_label_bytes": 0,
+    "auxiliary_bytes": 4857224,
+    "total_bytes": 5261992,
+    "total_mib": 5.018226623535156,
+    "pulse_encoding": "NA",
+    "label_encoding": "NA"
+  },
+  "inference": {
+    "final_latency_ms_per_sample": 0.04005703130717718
+  },
+  "working_memory_diagnostic": {
+    "native_peak_allocated_gpu_memory_mib": null,
+    "note": "Transient working memory; excluded from persistent storage."
+  }
+}

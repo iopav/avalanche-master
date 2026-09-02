@@ -13,8 +13,13 @@ from torch import nn
 from torch.optim import SGD
 from torch.utils.data import DataLoader
 
-from .models import TemporalBackbone, TemporalClassifier
-from .registry import METHODS, TRAINING_DEFAULTS
+from .models import BackboneClassifier, build_feature_extractor
+from .registry import DATASETS, DEFAULT_BACKBONES, METHODS, TRAINING_DEFAULTS
+from .replay_storage import (
+    Float32ClassBalancedBuffer,
+    PackedClassBalancedBuffer,
+    validate_uint8_one_hot,
+)
 
 
 def _phase_context(phase_plugin, phase: str):
@@ -24,12 +29,36 @@ def _phase_context(phase_plugin, phase: str):
     return profiler.temporary_phase(phase) if profiler is not None else contextlib.nullcontext()
 
 
+def _record_erace_persistence(profiler, storage_policy) -> None:
+    if profiler is None or not getattr(storage_policy, "one_hot_labels", False):
+        return
+    calls, elements = storage_policy.consume_persist_stats()
+    if not calls:
+        return
+    if storage_policy.packed_binary:
+        profiler.add_nonflop(
+            "numpy.packbits",
+            calls,
+            "Binary bit packing is persistent-storage preparation, not floating-point arithmetic.",
+            {"packed_elements": elements},
+        )
+    profiler.add_nonflop(
+        "uint8_one_hot_encode",
+        calls,
+        "One-hot allocation and indexed assignment are non-floating-point storage work.",
+        {"classes": storage_policy.num_classes},
+    )
+
+
 class InstrumentedERACE:
-    """ER-ACE loop that counts replay samples without splitting merged training FLOPs."""
+    """ER-ACE loop with its independently executed replay forward in auxiliary."""
 
     def _before_training_exp(self, **kwargs):
-        with _phase_context(self._cil_phase_plugin, "exemplar_or_sample_selection"):
-            return super()._before_training_exp(**kwargs)
+        with _phase_context(self._cil_phase_plugin, "learning_auxiliary"):
+            result = super()._before_training_exp(**kwargs)
+        profiler = None if self._cil_phase_plugin is None else self._cil_phase_plugin.profiler
+        _record_erace_persistence(profiler, self.storage_policy)
+        return result
 
     def training_epoch(self, **kwargs):
         from avalanche.models.utils import avalanche_forward
@@ -45,14 +74,31 @@ class InstrumentedERACE:
                 self.mb_buffer_y = self.mb_buffer_y.to(self.device)
                 self.mb_buffer_tid = self.mb_buffer_tid.to(self.device)
                 self._cil_extra_processed_samples = int(len(self.mb_buffer_y))
+                if getattr(self.storage_policy, "one_hot_labels", False):
+                    profiler = None if self._cil_phase_plugin is None else self._cil_phase_plugin.profiler
+                    if profiler is not None:
+                        if self.storage_policy.packed_binary:
+                            profiler.add_nonflop(
+                                "numpy.unpackbits",
+                                len(self.mb_buffer_y),
+                                "Replay bit unpacking and dtype materialization are non-floating-point work.",
+                                {"unpacked_elements": int(self.mb_buffer_x.numel())},
+                            )
+                        profiler.add_nonflop(
+                            "uint8_one_hot_decode",
+                            len(self.mb_buffer_y),
+                            "One-hot comparison and index recovery are non-floating-point work.",
+                            {"classes": self.storage_policy.num_classes},
+                        )
             self.optimizer.zero_grad()
             self.loss = self._make_empty_loss()
             self._before_forward(**kwargs)
             self.mb_output = self.forward()
             if self.replay_loader is not None:
-                self.mb_buffer_out = avalanche_forward(
-                    self.model, self.mb_buffer_x, self.mb_buffer_tid
-                )
+                with _phase_context(self._cil_phase_plugin, "learning_auxiliary"):
+                    self.mb_buffer_out = avalanche_forward(
+                        self.model, self.mb_buffer_x, self.mb_buffer_tid
+                    )
             self._after_forward(**kwargs)
             if self.replay_loader is None:
                 self.loss += self.criterion()
@@ -118,7 +164,7 @@ class FrozenBackboneFeCAMUpdate:
             # statistics pass as the terminal executed loop required by the
             # metrics1 denominator.
             profiler.begin_epoch()
-        with _phase_context(self.phase_plugin, "prototype_and_class_statistics"):
+        with _phase_context(self.phase_plugin, "learning_auxiliary"):
             means, covs = _gather_means_and_cov(
                 strategy.model,
                 strategy.experience.dataset,
@@ -180,7 +226,7 @@ class InstrumentedICaRLLossMixin:
 
     def before_forward(self, strategy, **kwargs):
         if self.old_model is not None:
-            with _phase_context(self.phase_plugin, "teacher_distillation_forward"):
+            with _phase_context(self.phase_plugin, "learning_auxiliary"):
                 with torch.no_grad():
                     self.old_logits = self.old_model(strategy.mb_x)
 
@@ -191,7 +237,7 @@ class InstrumentedICaRLLossMixin:
         )
         one_hot[range(len(targets)), targets.long()] = 1
         if self.old_logits is not None:
-            with _phase_context(self.phase_plugin, "teacher_distillation_forward"):
+            with _phase_context(self.phase_plugin, "learning_auxiliary"):
                 old_predictions = torch.sigmoid(self.old_logits)
             one_hot[:, self.old_classes] = old_predictions[:, self.old_classes]
             self.old_logits = None
@@ -222,11 +268,15 @@ def _make_icarl_loss(phase_plugin):
 class InstrumentedICaRLPluginMixin:
     """iCaRL plugin with exact <=2000 balancing and real packed Spike persistence."""
 
-    def __init__(self, memory_size, phase_plugin, pack_binary=False):
+    def __init__(self, memory_size, phase_plugin, pack_binary=False, num_classes=None):
         super().__init__(memory_size=memory_size, buffer_transform=None, fixed_memory=True)
         self.phase_plugin = phase_plugin
         self.pack_binary = pack_binary
+        self.num_classes = None if num_classes is None else int(num_classes)
+        if self.pack_binary and (self.num_classes is None or self.num_classes <= 0):
+            raise ValueError("Packed ICaRL replay requires the total dataset class count")
         self.packed_memory: list[dict[str, Any]] = []
+        self.persistent_labels: list[np.ndarray] = []
 
     def _record_nonflop(self, name: str, calls: int, reason: str, variables: dict[str, Any]) -> None:
         profiler = self.phase_plugin.profiler if self.phase_plugin is not None else None
@@ -239,60 +289,107 @@ class InstrumentedICaRLPluginMixin:
         return q + (1 if index < r else 0)
 
     def _materialize_packed(self) -> list[torch.Tensor]:
+        if len(self.packed_memory) != len(self.persistent_labels):
+            raise AssertionError("Packed ICaRL samples and labels have different group counts")
         materialized = []
+        decoded_labels = []
         unpacked_elements = 0
-        for item in self.packed_memory:
+        for item, one_hot in zip(self.packed_memory, self.persistent_labels):
             shape = tuple(item["shape"])
             count = math_prod(shape)
             unpacked_elements += count
             unpacked = np.unpackbits(item["data"], bitorder="little", count=count)
             materialized.append(torch.from_numpy(unpacked.reshape(shape).astype(np.float32, copy=False)))
+            validate_uint8_one_hot(one_hot, self.num_classes)
+            decoded_labels.append(one_hot.argmax(axis=1).astype(np.int64, copy=False))
+        self.y_memory = decoded_labels
         self._record_nonflop(
             "numpy.unpackbits",
             len(self.packed_memory),
             "Integer bit unpacking and dtype/data movement have no floating-point FLOP formula.",
             {"unpacked_elements": unpacked_elements},
         )
+        self._record_nonflop(
+            "uint8_one_hot_decode",
+            sum(len(labels) for labels in self.y_memory),
+            "One-hot comparison and index recovery are non-floating-point work.",
+            {"classes": self.num_classes},
+        )
         return materialized
+
+    def _materialize_labels(self) -> None:
+        decoded_labels = []
+        for one_hot in self.persistent_labels:
+            validate_uint8_one_hot(one_hot, self.num_classes)
+            decoded_labels.append(one_hot.argmax(axis=1).astype(np.int64, copy=False))
+        self.y_memory = decoded_labels
+        self._record_nonflop(
+            "uint8_one_hot_decode",
+            sum(len(labels) for labels in decoded_labels),
+            "One-hot comparison and index recovery are non-floating-point work.",
+            {"classes": self.num_classes},
+        )
 
     def _pack_current_memory(self) -> None:
         if not self.pack_binary:
             for idx, tensor in enumerate(self.x_memory):
                 self.x_memory[idx] = tensor.detach().cpu().to(torch.float32).contiguous()
-            return
+        if len(self.x_memory) != len(self.y_memory):
+            raise AssertionError("ICaRL replay sample and label groups are inconsistent")
         packed = []
+        persistent_labels = []
         packed_elements = 0
-        for tensor in self.x_memory:
-            array = tensor.detach().cpu().numpy()
-            packed_elements += int(array.size)
-            if not np.logical_or(array == 0, array == 1).all():
-                raise ValueError("Spike ICaRL exemplar is not exactly binary and cannot be stored as 1-bit packed")
-            bits = np.packbits(array.reshape(-1).astype(np.uint8), bitorder="little")
-            packed.append({"data": bits, "shape": tuple(int(v) for v in array.shape)})
+        for tensor, labels in zip(self.x_memory, self.y_memory):
+            if self.pack_binary:
+                array = tensor.detach().cpu().numpy()
+                packed_elements += int(array.size)
+                if not np.logical_or(array == 0, array == 1).all():
+                    raise ValueError("Spike ICaRL exemplar is not exactly binary and cannot be stored as 1-bit packed")
+                bits = np.packbits(array.reshape(-1).astype(np.uint8), bitorder="little")
+                packed.append({"data": bits, "shape": tuple(int(v) for v in array.shape)})
+            labels = np.asarray(labels, dtype=np.int64)
+            if np.any(labels < 0) or np.any(labels >= self.num_classes):
+                raise ValueError("ICaRL replay label is outside the dataset class range")
+            one_hot = np.zeros((len(labels), self.num_classes), dtype=np.uint8)
+            one_hot[np.arange(len(labels)), labels] = 1
+            persistent_labels.append(one_hot)
+        if self.pack_binary:
+            self._record_nonflop(
+                "numpy.packbits",
+                len(self.x_memory),
+                "Binary comparison, integer conversion and bit packing are non-floating-point work.",
+                {"packed_elements": packed_elements},
+            )
         self._record_nonflop(
-            "numpy.packbits",
-            len(self.x_memory),
-            "Binary comparison, integer conversion and bit packing are non-floating-point work.",
-            {"packed_elements": packed_elements},
+            "uint8_one_hot_encode",
+            sum(labels.shape[0] for labels in persistent_labels),
+            "One-hot allocation and indexed assignment are non-floating-point storage work.",
+            {"classes": self.num_classes},
         )
-        self.packed_memory = packed
-        self.x_memory = []
+        if self.pack_binary:
+            self.packed_memory = packed
+            self.x_memory = []
+        self.persistent_labels = persistent_labels
+        self.y_memory = []
 
     def after_train_dataset_adaptation(self, strategy, **kwargs):
-        if self.pack_binary and strategy.clock.train_exp_counter != 0:
-            self.x_memory = self._materialize_packed()
+        if strategy.clock.train_exp_counter != 0:
+            if self.pack_binary:
+                self.x_memory = self._materialize_packed()
+            else:
+                self._materialize_labels()
         super().after_train_dataset_adaptation(strategy, **kwargs)
 
     def after_training_exp(self, strategy, **kwargs):
         strategy.model.eval()
-        with _phase_context(self.phase_plugin, "exemplar_or_sample_selection"):
+        with _phase_context(self.phase_plugin, "learning_auxiliary"):
             self.construct_exemplar_set(strategy)
             self.reduce_exemplar_set(strategy)
-        with _phase_context(self.phase_plugin, "prototype_and_class_statistics"):
+        with _phase_context(self.phase_plugin, "learning_auxiliary"):
             self.compute_class_means(strategy)
+        stored = sum(len(labels) for labels in self.y_memory)
         self._pack_current_memory()
         strategy.model.train()
-        stored = sum(len(labels) for labels in self.y_memory)
         if stored > self.memory_size:
             raise AssertionError(f"ICaRL stored {stored} samples above cap {self.memory_size}")
 
@@ -360,13 +457,13 @@ def math_prod(values) -> int:
     return result
 
 
-def _make_icarl_plugin(memory_size, phase_plugin, pack_binary):
+def _make_icarl_plugin(memory_size, phase_plugin, pack_binary, num_classes):
     from avalanche.training.supervised.icarl import _ICaRLPlugin
 
     class _Plugin(InstrumentedICaRLPluginMixin, _ICaRLPlugin):
         pass
 
-    return _Plugin(memory_size, phase_plugin, pack_binary)
+    return _Plugin(memory_size, phase_plugin, pack_binary, num_classes)
 
 
 @dataclass
@@ -376,20 +473,59 @@ class StrategyBundle:
     phase_plugin: Any | None
     method_plugin: Any | None = None
     criterion_plugin: Any | None = None
+    backbone_id: str | None = None
 
     def add_manual_after_experience(self, profiler: Any, experience) -> None:
+        if self.method == "er_ace":
+            _record_erace_persistence(profiler, self.strategy.storage_policy)
+            return
         if self.method != "cwr_star":
             return
         classes = len(experience.classes_in_this_experience)
-        dim = 64
+        cwr_layer = self.method_plugin.get_cwr_layer()
+        if cwr_layer is None or not hasattr(cwr_layer, "in_features"):
+            raise RuntimeError("Unable to read CWR* feature dimension from its classifier layer")
+        dim = int(cwr_layer.in_features)
         # np.average over all current-class weights, then subtract scalar mean per weight.
         flops = 2 * classes * dim
         profiler.add_manual(
-            "manual_supplement",
+            "learning_auxiliary",
             flops,
             "CWR NumPy mean and mean-shift: (m*d-1 adds + 1 divide) + m*d subtracts = 2*m*d",
             {"m_current_classes": classes, "feature_dim": dim},
         )
+
+    def network_summary(self, task_count: int) -> dict[str, int | None]:
+        if self.method == "tagfex":
+            final_hidden = int(self.strategy.model.feature_dim)
+            first_branch = int(self.strategy.model.ts_nets[0].out_dim)
+            return {
+                "final_hidden_neurons": final_hidden,
+                "total_new_neurons": final_hidden - first_branch,
+                "total_reused_neurons": final_hidden - first_branch,
+            }
+        feature_extractor = getattr(self.strategy.model, "feature_extractor", None)
+        feature_dim = int(getattr(feature_extractor, "feature_dim", 512))
+        return {
+            "final_hidden_neurons": feature_dim,
+            "total_new_neurons": 0,
+            "total_reused_neurons": None,
+        }
+
+
+def _model_input_shape(dataset_name: str, supplied: tuple[int, ...] | None) -> tuple[int, ...]:
+    if supplied is not None:
+        return tuple(int(value) for value in supplied)
+    spec = DATASETS[dataset_name]
+    if dataset_name == "spike":
+        return (spec.in_channels, spec.timesteps)
+    if spec.image_layout == "NCHW":
+        return tuple(int(value) for value in spec.image_train_shape[1:])
+    return (
+        int(spec.image_train_shape[3]),
+        int(spec.image_train_shape[1]),
+        int(spec.image_train_shape[2]),
+    )
 
 
 def _optimizer(parameters, training_parameters: dict[str, Any]):
@@ -399,6 +535,7 @@ def _optimizer(parameters, training_parameters: dict[str, Any]):
         parameters,
         lr=training_parameters["learning_rate"],
         momentum=training_parameters["momentum"],
+        # momentum = 0.9,
         weight_decay=training_parameters["weight_decay"],
         foreach=training_parameters["foreach"],
     )
@@ -409,6 +546,10 @@ def build_si_tuning_strategy(
     epochs: int,
     device: torch.device,
     method_parameters: dict[str, Any],
+    *,
+    backbone_id: str = "resnet18_cifar",
+    dataset_name: str = "uwave",
+    model_input_shape: tuple[int, ...] | None = None,
 ) -> StrategyBundle:
     """构建仅供手工候选试验使用、且不启用 FLOPs 统计的 SI 策略。"""
     from avalanche.training.supervised import SynapticIntelligence
@@ -427,7 +568,9 @@ def build_si_tuning_strategy(
         raise ValueError("SI eps must be positive")
 
     training_parameters = dict(TRAINING_DEFAULTS)
-    model = TemporalClassifier(in_channels)
+    model = BackboneClassifier(
+        backbone_id, dataset_name, _model_input_shape(dataset_name, model_input_shape)
+    )
     strategy = SynapticIntelligence(
         model=model,
         optimizer=_optimizer(model.parameters(), training_parameters),
@@ -446,7 +589,7 @@ def build_si_tuning_strategy(
         for plugin in strategy.plugins
         if plugin.__class__.__name__ == "SynapticIntelligencePlugin"
     )
-    return StrategyBundle("si", strategy, None, method_plugin)
+    return StrategyBundle("si", strategy, None, method_plugin, backbone_id=backbone_id)
 
 
 def build_lwf_tuning_strategy(
@@ -454,6 +597,10 @@ def build_lwf_tuning_strategy(
     epochs: int,
     device: torch.device,
     method_parameters: dict[str, Any],
+    *,
+    backbone_id: str = "resnet18_cifar",
+    dataset_name: str = "uwave",
+    model_input_shape: tuple[int, ...] | None = None,
 ) -> StrategyBundle:
     """构建仅供手工候选试验使用、且不启用 FLOPs 统计的 LwF 策略。"""
     from avalanche.training.supervised import LwF
@@ -472,7 +619,9 @@ def build_lwf_tuning_strategy(
         raise ValueError("LwF temperature must be positive")
 
     training_parameters = dict(TRAINING_DEFAULTS)
-    model = TemporalClassifier(in_channels)
+    model = BackboneClassifier(
+        backbone_id, dataset_name, _model_input_shape(dataset_name, model_input_shape)
+    )
     strategy = LwF(
         model=model,
         optimizer=_optimizer(model.parameters(), training_parameters),
@@ -489,7 +638,7 @@ def build_lwf_tuning_strategy(
     method_plugin = next(
         plugin for plugin in strategy.plugins if plugin.__class__.__name__ == "LwFPlugin"
     )
-    return StrategyBundle("lwf", strategy, None, method_plugin)
+    return StrategyBundle("lwf", strategy, None, method_plugin, backbone_id=backbone_id)
 
 
 def _make_ewc_compatible_cosine_classifier(feature_dim: int):
@@ -543,6 +692,10 @@ def build_ewc_cosine_tuning_strategy(
     epochs: int,
     device: torch.device,
     method_parameters: dict[str, Any],
+    *,
+    backbone_id: str = "resnet18_cifar",
+    dataset_name: str = "uwave",
+    model_input_shape: tuple[int, ...] | None = None,
 ) -> StrategyBundle:
     """构建仅供手工候选试验使用、且不启用 FLOPs 统计的 EWC+Cosine 策略。"""
     from avalanche.training.supervised import EWC
@@ -560,17 +713,23 @@ def build_ewc_cosine_tuning_strategy(
     if mode != "separate":
         raise ValueError("EWC+Cosine manual candidate currently requires mode='separate'")
 
-    class _TemporalCosineClassifier(nn.Module):
+    class _BackboneCosineClassifier(nn.Module):
         def __init__(self):
             super().__init__()
-            self.feature_extractor = TemporalBackbone(in_channels)
-            self.classifier = _make_ewc_compatible_cosine_classifier(64)
+            self.feature_extractor = build_feature_extractor(
+                backbone_id,
+                dataset_name,
+                _model_input_shape(dataset_name, model_input_shape),
+            )
+            self.classifier = _make_ewc_compatible_cosine_classifier(
+                self.feature_extractor.feature_dim
+            )
 
         def forward(self, x):
             return self.classifier(self.feature_extractor(x))
 
     training_parameters = dict(TRAINING_DEFAULTS)
-    model = _TemporalCosineClassifier()
+    model = _BackboneCosineClassifier()
     strategy = EWC(
         model=model,
         optimizer=_optimizer(model.parameters(), training_parameters),
@@ -587,7 +746,9 @@ def build_ewc_cosine_tuning_strategy(
     method_plugin = next(
         plugin for plugin in strategy.plugins if plugin.__class__.__name__ == "EWCPlugin"
     )
-    return StrategyBundle("ewc_cosine", strategy, None, method_plugin)
+    return StrategyBundle(
+        "ewc_cosine", strategy, None, method_plugin, backbone_id=backbone_id
+    )
 
 
 def build_mas_tuning_strategy(
@@ -595,6 +756,10 @@ def build_mas_tuning_strategy(
     epochs: int,
     device: torch.device,
     method_parameters: dict[str, Any],
+    *,
+    backbone_id: str = "resnet18_cifar",
+    dataset_name: str = "uwave",
+    model_input_shape: tuple[int, ...] | None = None,
 ) -> StrategyBundle:
     """构建仅供手工候选试验使用、且不启用 FLOPs 统计的原生 Avalanche MAS。"""
     from avalanche.training.supervised import MAS
@@ -613,7 +778,9 @@ def build_mas_tuning_strategy(
         raise ValueError("MAS alpha must be in [0, 1]")
 
     training_parameters = dict(TRAINING_DEFAULTS)
-    model = TemporalClassifier(in_channels)
+    model = BackboneClassifier(
+        backbone_id, dataset_name, _model_input_shape(dataset_name, model_input_shape)
+    )
     strategy = MAS(
         model=model,
         optimizer=_optimizer(model.parameters(), training_parameters),
@@ -631,7 +798,7 @@ def build_mas_tuning_strategy(
     method_plugin = next(
         plugin for plugin in strategy.plugins if plugin.__class__.__name__ == "MASPlugin"
     )
-    return StrategyBundle("mas", strategy, None, method_plugin)
+    return StrategyBundle("mas", strategy, None, method_plugin, backbone_id=backbone_id)
 
 
 def build_strategy(
@@ -642,6 +809,8 @@ def build_strategy(
     dataset_name: str,
     enable_flop_accounting: bool = True,
     resolved_parameters: dict[str, Any] | None = None,
+    backbone_id: str | None = None,
+    model_input_shape: tuple[int, ...] | None = None,
 ) -> StrategyBundle:
     from avalanche.models import IncrementalClassifier, TrainEvalModel
     from avalanche.training.supervised import CWRStar, EWC, Naive
@@ -649,6 +818,8 @@ def build_strategy(
 
     if method not in METHODS:
         raise ValueError(f"Unknown method {method}")
+    resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[method]
+    resolved_input_shape = _model_input_shape(dataset_name, model_input_shape)
     training_parameters = dict(TRAINING_DEFAULTS)
     method_parameters = dict(METHODS[method])
     for key, value in (resolved_parameters or {}).items():
@@ -675,7 +846,7 @@ def build_strategy(
         eval_every=-1,
     )
     if method == "er_ace":
-        model = TemporalClassifier(in_channels)
+        model = BackboneClassifier(resolved_backbone_id, dataset_name, resolved_input_shape)
         strategy_cls = _make_instrumented_er_ace_class()
         strategy = strategy_cls(
             model=model,
@@ -687,9 +858,24 @@ def build_strategy(
             **common,
         )
         strategy._cil_phase_plugin = phase_plugin
-        return StrategyBundle(method, strategy, phase_plugin, strategy.storage_policy)
+        buffer_class = (
+            PackedClassBalancedBuffer
+            if dataset_name == "spike"
+            else Float32ClassBalancedBuffer
+        )
+        strategy.storage_policy = buffer_class(
+            max_size=method_parameters["memory_size"],
+            num_classes=DATASETS[dataset_name].num_classes,
+        )
+        return StrategyBundle(
+            method,
+            strategy,
+            phase_plugin,
+            strategy.storage_policy,
+            backbone_id=resolved_backbone_id,
+        )
     if method == "ewc":
-        model = TemporalClassifier(in_channels)
+        model = BackboneClassifier(resolved_backbone_id, dataset_name, resolved_input_shape)
         strategy = EWC(
             model=model,
             optimizer=_optimizer(model.parameters(), training_parameters),
@@ -700,9 +886,11 @@ def build_strategy(
             **common,
         )
         method_plugin = next(p for p in strategy.plugins if p.__class__.__name__ == "EWCPlugin")
-        return StrategyBundle(method, strategy, phase_plugin, method_plugin)
+        return StrategyBundle(
+            method, strategy, phase_plugin, method_plugin, backbone_id=resolved_backbone_id
+        )
     if method == "cwr_star":
-        model = TemporalClassifier(in_channels)
+        model = BackboneClassifier(resolved_backbone_id, dataset_name, resolved_input_shape)
         strategy = CWRStar(
             model=model,
             optimizer=_optimizer(model.parameters(), training_parameters),
@@ -712,15 +900,24 @@ def build_strategy(
             **common,
         )
         method_plugin = next(p for p in strategy.plugins if p.__class__.__name__ == "CWRStarPlugin")
-        return StrategyBundle(method, strategy, phase_plugin, method_plugin)
+        return StrategyBundle(
+            method, strategy, phase_plugin, method_plugin, backbone_id=resolved_backbone_id
+        )
     if method == "icarl":
-        feature_extractor = TemporalBackbone(in_channels)
-        classifier = IncrementalClassifier(64, initial_out_features=1)
+        feature_extractor = build_feature_extractor(
+            resolved_backbone_id, dataset_name, resolved_input_shape
+        )
+        classifier = IncrementalClassifier(
+            feature_extractor.feature_dim, initial_out_features=1
+        )
         eval_classifier = __import__("avalanche.models", fromlist=["NCMClassifier"]).NCMClassifier(normalize=True)
         model = TrainEvalModel(feature_extractor, classifier, eval_classifier)
         loss_plugin = _make_icarl_loss(phase_plugin)
         icarl_plugin = _make_icarl_plugin(
-            method_parameters["memory_size"], phase_plugin, pack_binary=dataset_name == "spike"
+            method_parameters["memory_size"],
+            phase_plugin,
+            pack_binary=dataset_name == "spike",
+            num_classes=DATASETS[dataset_name].num_classes,
         )
         strategy = SupervisedTemplate(
             model=model,
@@ -731,13 +928,24 @@ def build_strategy(
             plugins=[*phase_plugins, icarl_plugin, loss_plugin],
             **common,
         )
-        return StrategyBundle(method, strategy, phase_plugin, icarl_plugin, loss_plugin)
+        return StrategyBundle(
+            method,
+            strategy,
+            phase_plugin,
+            icarl_plugin,
+            loss_plugin,
+            backbone_id=resolved_backbone_id,
+        )
     if method == "fecam":
-        feature_extractor = TemporalBackbone(in_channels)
-        # Only task 1 is optimized and it always contains three remapped
-        # classes. A fixed base-session head avoids allocating unused later
-        # class weights that FeCAM never consults at inference.
-        train_classifier = nn.Linear(64, 3)
+        feature_extractor = build_feature_extractor(
+            resolved_backbone_id, dataset_name, resolved_input_shape
+        )
+        # Only task 1 is optimized. Its class count depends on the selected
+        # order (3, 4 or 5 in the current registry), so the training head must
+        # adapt to the actual base experience instead of hard-coding three.
+        train_classifier = IncrementalClassifier(
+            feature_extractor.feature_dim, initial_out_features=1
+        )
         eval_classifier = _make_device_safe_fecam_classifier(
             tukey=method_parameters["tukey"],
             shrinkage=method_parameters["shrinkage"],
@@ -754,5 +962,59 @@ def build_strategy(
             plugins=[*phase_plugins, fecam_plugin],
             **common,
         )
-        return StrategyBundle(method, strategy, phase_plugin, fecam_plugin)
+        return StrategyBundle(
+            method, strategy, phase_plugin, fecam_plugin, backbone_id=resolved_backbone_id
+        )
+    if method == "tagfex":
+        from .tagfex_avalanche import (
+            AvalancheTagFex,
+            ImageTagFexNet,
+            TagFexHyperParameters,
+        )
+
+        hparams = TagFexHyperParameters(
+            init_epochs=epochs,
+            inc_epochs=epochs,
+            train_mb_size=int(training_parameters["train_mb_size"]),
+            eval_mb_size=int(training_parameters["eval_mb_size"]),
+            memory_size=int(method_parameters["memory_size"]),
+            init_lr=float(training_parameters["learning_rate"]),
+            inc_lr=float(training_parameters["learning_rate"]),
+            momentum=float(training_parameters["momentum"]),
+            init_weight_decay=float(training_parameters["weight_decay"]),
+            inc_weight_decay=float(training_parameters["weight_decay"]),
+            contrast_factor=float(method_parameters["contrast_factor"]),
+            contrast_kd_factor=float(method_parameters["contrast_kd_factor"]),
+            aux_factor=float(method_parameters["aux_factor"]),
+            trans_cls_factor=float(method_parameters["trans_cls_factor"]),
+            transfer_factor=float(method_parameters["transfer_factor"]),
+            infonce_temp=float(method_parameters["infonce_temp"]),
+            infonce_kd_temp=float(method_parameters["infonce_kd_temp"]),
+            kd_temp=float(method_parameters["kd_temp"]),
+            proj_hidden_dim=int(method_parameters["proj_hidden_dim"]),
+            proj_output_dim=int(method_parameters["proj_output_dim"]),
+            interpolation_factor=float(method_parameters["interpolation_factor"]),
+            attention_heads=int(method_parameters["attention_heads"]),
+        )
+        model = ImageTagFexNet(
+            resolved_backbone_id,
+            dataset_name,
+            resolved_input_shape,
+            proj_hidden_dim=hparams.proj_hidden_dim,
+            proj_output_dim=hparams.proj_output_dim,
+            interpolation_factor=hparams.interpolation_factor,
+            attention_heads=hparams.attention_heads,
+        ).to(device)
+        strategy = AvalancheTagFex(
+            device=device,
+            hparams=hparams,
+            dataset_name=dataset_name,
+            num_classes=DATASETS[dataset_name].num_classes,
+            model=model,
+            plugins=phase_plugins,
+        )
+        strategy._cil_phase_plugin = phase_plugin
+        return StrategyBundle(
+            method, strategy, phase_plugin, strategy, backbone_id=resolved_backbone_id
+        )
     raise AssertionError(method)

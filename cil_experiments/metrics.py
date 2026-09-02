@@ -36,6 +36,7 @@ CIL_KEYS = {
     "forgetting_positive_fraction",
     "task_end_seen_accuracy_curve",
     "forgetting_per_task",
+    "intransigence",
 }
 
 FLOP_KEYS = {
@@ -45,8 +46,12 @@ FLOP_KEYS = {
     "hyperparameter_search_flops",
     "single_sample_forward_flops",
 }
-
-
+# 8.27core = before_forward ~ after_update 之间的flopsforward
+# loss
+# regularization penalty
+# backward
+# optimizer step
+# nonflops ops include recorded integer bit pack/unpack and one-hot encode/decode work.
 def compute_cil_metrics(matrix: np.ndarray, test_counts: list[int]) -> dict[str, Any]:
     tasks = matrix.shape[0]
     if matrix.shape != (tasks, tasks) or len(test_counts) != tasks:
@@ -82,11 +87,14 @@ def compute_cil_metrics(matrix: np.ndarray, test_counts: list[int]) -> dict[str,
         "forgetting_positive_fraction": float(np.mean(f > 0)),
         "task_end_seen_accuracy_curve": seen_curve,
         "forgetting_per_task": forgetting,
+        "intransigence": None,
     }
     return result
 
 
-def validate_summary(summary: dict[str, Any]) -> None:
+def validate_summary(
+    summary: dict[str, Any], *, allow_pending_intransigence: bool = False
+) -> None:
     if set(summary) != SUMMARY_KEYS:
         raise AssertionError(f"summary top-level keys differ: {set(summary) ^ SUMMARY_KEYS}")
     if set(summary["cil_performance"]) != CIL_KEYS:
@@ -172,6 +180,21 @@ def validate_summary(summary: dict[str, Any]) -> None:
         raise AssertionError("seen-accuracy curve length mismatch")
     if len(cil["forgetting_per_task"]) != tasks - 1:
         raise AssertionError("forgetting array length mismatch")
+    intransigence = cil["intransigence"]
+    if intransigence is None:
+        if not allow_pending_intransigence:
+            raise AssertionError("intransigence is pending")
+    elif (
+        not isinstance(intransigence, list)
+        or len(intransigence) != tasks
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float, np.number))
+            or not np.isfinite(value)
+            for value in intransigence
+        )
+    ):
+        raise AssertionError("intransigence must be a finite list with one value per task")
     if not math.isclose(
         cil["average_incremental_accuracy"],
         float(np.mean(cil["task_end_seen_accuracy_curve"])),

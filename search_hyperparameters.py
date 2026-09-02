@@ -54,6 +54,11 @@ SEARCH_CANDIDATES: dict[str, list[dict[str, Any]]] = {
         {"learning_rate": 0.10, "shrink1": 0.5, "shrink2": 0.5},
         {"learning_rate": 0.10, "shrink1": 2.0, "shrink2": 2.0},
     ],
+    "tagfex": [
+        {"learning_rate": 0.10, "memory_size": 2000},
+        {"learning_rate": 0.05, "memory_size": 2000},
+        {"learning_rate": 0.01, "memory_size": 2000},
+    ],
 }
 
 
@@ -90,7 +95,8 @@ def _evaluate_validation_with_flops(model, experiences, device: torch.device):
                 for batch in loader:
                     x = batch[0].to(device)
                     y = batch[1].to(device)
-                    logits = model(x)
+                    output = model(x)
+                    logits = output["logits"] if isinstance(output, dict) else output
                     correct += int((torch.argmax(logits, dim=1) == y).sum().item())
                     total += int(y.numel())
                     profiler.add_processed_samples(len(y))

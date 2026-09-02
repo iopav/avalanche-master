@@ -3,7 +3,7 @@ from common import run_manual
 PARAMETERS = {
     # SGD 学习率。增大可快速适应，但可能扰动旧特征；减小更保守，
     # 但可能使新类欠拟合。
-    "learning_rate": 0.1,
+    "learning_rate": 0.15,
     # 所有已见类别共享的 exemplar 总上限。增大通常可改善 NCM 原型和旧类保持，
     # 但会增加存储、样本选择和回放计算成本。
     "memory_size": 2000,

@@ -18,17 +18,19 @@ from .flops import (
     summarize_auxiliary_nonflop_ops,
     summarize_learning_flops,
 )
-from .final_hyperparameters import (
-    FINAL_HYPERPARAMETERS_LOCKED,
-    final_hyperparameter_hash,
-    get_final_hyperparameters,
-)
+from .final_hyperparameters import get_final_hyperparameters, is_final_hyperparameters_locked
 from .hyperparameter_search_flops import get_hyperparameter_search_flops
+from .intransigence import (
+    fill_intransigence,
+    find_joint_summary,
+    validate_joint_artifact_match,
+)
 from .metrics import compute_cil_metrics, validate_summary
+from .models import BACKBONES
 from .output import AtomicRunArtifacts
 from .registry import (
-    BACKBONE_CONFIG,
     DATASETS,
+    DEFAULT_BACKBONES,
     METHODS,
     ORDER_IDS,
     ORDERS_BY_DATASET,
@@ -37,7 +39,6 @@ from .registry import (
     dataset_dict,
     get_task_groups,
     get_task_split,
-    sha256_file,
 )
 from .storage import compute_persistent_storage
 from .strategies import StrategyBundle, build_strategy
@@ -106,7 +107,8 @@ def _evaluate_experience(
     with torch.no_grad():
         for batch in loader:
             x, y = batch[0].to(device), batch[1].to(device)
-            logits = model(x)
+            output = model(x)
+            logits = output["logits"] if isinstance(output, dict) else output
             if logits.ndim != 2:
                 raise ValueError(f"Expected 2D logits, received {tuple(logits.shape)}")
             predictions = torch.argmax(logits, dim=1)
@@ -180,27 +182,7 @@ def _fvcore_crosscheck(model, sample: torch.Tensor) -> dict[str, Any]:
     }
 
 
-def _source_hashes(project_root: Path, method: str) -> dict[str, str]:
-    sources = {
-        "avalanche_version": project_root / "avalanche" / "__init__.py",
-        "er_ace": project_root / "avalanche" / "training" / "supervised" / "er_ace.py",
-        "icarl": project_root / "avalanche" / "training" / "supervised" / "icarl.py",
-        "strategy_wrappers": project_root / "avalanche" / "training" / "supervised" / "strategy_wrappers.py",
-        "fecam": project_root / "avalanche" / "models" / "fecam.py",
-        "fecam_update": project_root / "avalanche" / "training" / "plugins" / "update_fecam.py",
-    }
-    sources["selected_method_marker"] = sources[
-        "er_ace" if method == "er_ace" else "icarl" if method == "icarl" else "fecam" if method == "fecam" else "strategy_wrappers"
-    ]
-    hashes = {key: sha256_file(path) for key, path in sources.items()}
-    experiment_package = project_root / "cil_experiments"
-    for path in sorted(experiment_package.glob("*.py")):
-        hashes[f"cil_experiments/{path.name}"] = sha256_file(path)
-    return hashes
-
-
 def make_config(
-    project_root: Path,
     dataset_name: str,
     method: str,
     order_id: int,
@@ -208,6 +190,8 @@ def make_config(
     resolved_hyperparameters: dict[str, Any],
     hyperparameter_overrides: dict[str, Any] | None = None,
     search_provenance: dict[str, Any] | None = None,
+    backbone_id: str | None = None,
+    input_view_id: str | None = None,
 ) -> dict[str, Any]:
     spec = DATASETS[dataset_name]
     task_groups = get_task_groups(dataset_name, order_id)
@@ -215,15 +199,32 @@ def make_config(
     effective_sgd_epochs = [int(epochs)] * len(task_groups)
     if method == "fecam":
         effective_sgd_epochs[1:] = [0] * (len(task_groups) - 1)
+    resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[method]
+    backbone_spec = BACKBONES[resolved_backbone_id]
+    backbone = {
+        "backbone_id": resolved_backbone_id,
+        "feature_dim": backbone_spec.feature_dim,
+        "feature_dim_per_branch": (
+            backbone_spec.feature_dim if method == "tagfex" else None
+        ),
+        "base_width": backbone_spec.base_width,
+        "stage_channels": list(backbone_spec.stage_channels),
+        "pretrained": backbone_spec.pretrained,
+        "status": (
+            "source_structure_image_tagfex_port"
+            if method == "tagfex"
+            else "registered_shared_backbone"
+        ),
+    }
     return {
-        "schema": "metrics1.docx-compatible-avalanche-cil-v1",
+        "schema": "metrics1.docx-compatible-avalanche-cil-v2",
         "dataset": dataset_dict(spec),
         "method": method,
         "method_parameters": {
             key: resolved_hyperparameters.get(key, value)
             for key, value in METHODS[method].items()
         },
-        "backbone": {"in_channels": spec.in_channels, **BACKBONE_CONFIG},
+        "backbone": backbone,
         "training": {
             **{
                 key: resolved_hyperparameters[key]
@@ -238,11 +239,31 @@ def make_config(
         "protocol": {
             "augmentation": "none",
             "normalization": "none",
-            "technical_input_conversion": "source dtype -> float32; [T,C] -> [C,T]",
+            "input_view_id": input_view_id,
+            "technical_input_conversion": (
+                "raw binary [T,C] -> [C,T] persistence view -> runtime RGB 160x160 at model boundary"
+                if dataset_name == "spike"
+                else "stored RGB float32 image view"
+            ),
             "classes_per_experience": list(class_split),
             "replay_budget_cap_samples": 2000,
+            "spike_replay_persistence": (
+                "selected samples are stored as true 1-bit packed arrays; uint8/float32 tensors exist only while replay is materialized"
+                if dataset_name == "spike" and method in {"er_ace", "icarl", "tagfex"}
+                else None
+            ),
+            "spike_replay_label_persistence": (
+                "uint8 one-hot using one byte per class entry"
+                if dataset_name == "spike" and method in {"er_ace", "icarl", "tagfex"}
+                else None
+            ),
             "flop_backend": "torch.utils.flop_counter.FlopCounterMode",
             "flop_convention": "1 MAC = 2 FLOPs; no post-hoc doubling of PyTorch 2.11 totals",
+            "tagfex_two_view_policy": (
+                "two value-identical views because protocol augmentation is none; replay is merged "
+                "before the student forward and the inseparable mixed optimization step remains in core_training"
+                if method == "tagfex" else None
+            ),
         },
         "order_registry_source": "cil_experiments/order_seed_registry.py",
         "selected_task_groups": [list(group) for group in task_groups],
@@ -253,8 +274,7 @@ def make_config(
         "seeds": list(SEEDS),
         "final_hyperparameters": {
             "source": "cil_experiments/final_hyperparameters.py",
-            "registry_locked": FINAL_HYPERPARAMETERS_LOCKED,
-            "resolved_entry_hash": final_hyperparameter_hash(resolved_hyperparameters),
+            "registry_locked": is_final_hyperparameters_locked(method),
             "resolved": dict(resolved_hyperparameters),
             "explicit_diagnostic_overrides": dict(hyperparameter_overrides or {}),
         },
@@ -269,7 +289,14 @@ def make_config(
             **(search_provenance or {}),
         },
         "summary_null_reasons": {
-            "network.total_reused_neurons": "No comparable explicit neuron-reuse mechanism.",
+            **(
+                {}
+                if method == "tagfex"
+                else {
+                    "network.total_reused_neurons":
+                    "No comparable explicit neuron-reuse mechanism."
+                }
+            ),
             "training_runtime.total_gpu_ms": "null only for CPU execution.",
             "working_memory_diagnostic.native_peak_allocated_gpu_memory_mib": "null only for CPU execution.",
         },
@@ -279,7 +306,6 @@ def make_config(
             "cuda_runtime": torch.version.cuda,
             "avalanche": __import__("avalanche").__version__,
         },
-        "source_sha256": _source_hashes(project_root, method),
     }
 
 
@@ -338,6 +364,9 @@ def run_one(
     overwrite: bool = False,
     search_provenance: dict[str, Any] | None = None,
     parameter_overrides: dict[str, Any] | None = None,
+    backbone_id: str | None = None,
+    compute_intransigence_enabled: bool = True,
+    joint_summary_path: Path | None = None,
 ) -> Path:
     if seed not in SEEDS:
         raise ValueError(f"Seed {seed} is not in the locked seed registry")
@@ -355,14 +384,21 @@ def run_one(
     epochs = int(resolved_hyperparameters["epochs_per_experience"])
     num_workers = int(resolved_hyperparameters["num_workers"])
     set_determinism(seed)
-    data = build_dataset_bundle(dataset_root, DATASETS[dataset_name], order_id)
+    resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[method]
+    if resolved_backbone_id not in BACKBONES:
+        raise ValueError(
+            f"Unknown backbone {resolved_backbone_id!r}; registered={sorted(BACKBONES)}"
+        )
+    input_view = "image"
+    data = build_dataset_bundle(
+        dataset_root, DATASETS[dataset_name], order_id, input_view=input_view
+    )
     hyperparameter_search_flops = _resolve_hyperparameter_search_flops(
         project_root, dataset_name, method, search_provenance
     )
     resolved_search_provenance = dict(search_provenance or {})
     resolved_search_provenance["hyperparameter_search_flops"] = hyperparameter_search_flops
     config = make_config(
-        project_root,
         dataset_name,
         method,
         order_id,
@@ -370,7 +406,45 @@ def run_one(
         resolved_hyperparameters,
         resolved_overrides or None,
         resolved_search_provenance,
+        resolved_backbone_id,
+        data.input_view_id,
     )
+    matched_joint_summary = None
+    if compute_intransigence_enabled:
+        matched_joint_summary = (
+            joint_summary_path.resolve()
+            if joint_summary_path is not None
+            else find_joint_summary(
+                result_root,
+                dataset=dataset_name,
+                paired_method=method,
+                order_id=order_id,
+                seed=seed,
+            )
+        )
+    config["intransigence"] = {
+        "automatic_fill_enabled": bool(compute_intransigence_enabled),
+        "joint_summary_path": (
+            str(matched_joint_summary) if matched_joint_summary is not None else None
+        ),
+        "pending_results_are_formal_aggregation_eligible": False,
+    }
+    if not compute_intransigence_enabled:
+        config["summary_null_reasons"]["cil_performance.intransigence"] = (
+            "Automatic Joint matching was explicitly disabled with --skip-intransigence."
+        )
+    elif matched_joint_summary is not None:
+        validate_joint_artifact_match(
+            {
+                "dataset": dataset_name,
+                "method": method,
+                "order_id": int(order_id),
+                "seed": int(seed),
+                "tasks": int(data.tasks),
+            },
+            config,
+            matched_joint_summary,
+        )
 
     with AtomicRunArtifacts(result_root, dataset_name, method, order_id, seed, config, overwrite) as artifacts:
         log = artifacts.logger
@@ -379,10 +453,8 @@ def run_one(
         log.info("data_contract=%s", json.dumps(dataset_dict(data.spec), ensure_ascii=False, sort_keys=True))
         log.info("raw_order=%s", list(data.raw_order))
         log.info("label_map=%s inverse_label_map=%s", data.label_map, data.inverse_label_map)
-        log.info("config_hash=%s", artifacts.config["config_hash"])
         log.info(
-            "final_hyperparameters_source=cil_experiments/final_hyperparameters.py entry_hash=%s resolved=%s",
-            final_hyperparameter_hash(resolved_hyperparameters),
+            "final_hyperparameters_source=cil_experiments/final_hyperparameters.py resolved=%s",
             json.dumps(resolved_hyperparameters, ensure_ascii=False, sort_keys=True),
         )
         log.info("resolved_config=%s", json.dumps(artifacts.config, ensure_ascii=False, sort_keys=True))
@@ -394,7 +466,7 @@ def run_one(
                     "secondary_backend": "fvcore.nn.FlopCountAnalysis",
                     "convention": "1 MAC = 2 FLOPs; PyTorch 2.11 convolution and matrix formulas are not doubled again",
                     "scope": "all actually executed train forwards, replay, teacher/distillation, loss/regularization, backward, optimizer updates, selection, prototypes/class statistics, method-specific operations, and manual non-dispatch formulas",
-                    "phase_exclusivity": "one active phase per dispatched operator; manual rules added once outside dispatch",
+                    "phase_exclusivity": "training emits only core_training and learning_auxiliary; ER-ACE's separate replay forward is auxiliary, while mixed replay optimization remains core",
                     "unknown_policy": "any unregistered computational leaf operator aborts the run before publication",
                 },
                 sort_keys=True,
@@ -420,6 +492,8 @@ def run_one(
             device,
             dataset_name,
             resolved_parameters=resolved_hyperparameters,
+            backbone_id=resolved_backbone_id,
+            model_input_shape=data.model_input_shape,
         )
         matrix = np.full((data.tasks, data.tasks), np.nan, dtype=np.float64)
         task_wall: list[float] = []
@@ -485,11 +559,7 @@ def run_one(
             "seed": int(seed),
             "tasks": int(data.tasks),
             "cil_performance": cil,
-            "network": {
-                "final_hidden_neurons": 64,
-                "total_new_neurons": 0,
-                "total_reused_neurons": None,
-            },
+            "network": bundle.network_summary(data.tasks),
             "training_runtime": {
                 "total_s": total_s,
                 "total_gpu_ms": float(sum(task_gpu)) if task_gpu else None,
@@ -511,7 +581,7 @@ def run_one(
                 "note": "Transient working memory; excluded from persistent storage.",
             },
         }
-        validate_summary(summary)
+        validate_summary(summary, allow_pending_intransigence=True)
         log.info("accuracy_matrix=%s", matrix.tolist())
         log.info("single_sample_forward_flops=%d detail=%s", single_forward_flops, json.dumps(single_detail, ensure_ascii=False, sort_keys=True))
         log.info("fvcore_crosscheck=%s", json.dumps(fvcore_check, ensure_ascii=False, sort_keys=True))
@@ -524,6 +594,8 @@ def run_one(
         accuracy_matrix = {
             "dataset": dataset_name,
             "method": method,
+            "backbone_id": resolved_backbone_id,
+            "input_view_id": data.input_view_id,
             "order_id": int(order_id),
             "seed": int(seed),
             "timestamp": artifacts.timestamp,
@@ -534,4 +606,11 @@ def run_one(
             "accuracy_matrix_lower_triangular": lower_triangular,
         }
         artifacts.commit(summary, accuracy_matrix)
+        if matched_joint_summary is not None:
+            values = fill_intransigence(artifacts.summary_path, matched_joint_summary)
+            log.info(
+                "intransigence_joint=%s values=%s",
+                matched_joint_summary,
+                values,
+            )
         return artifacts.summary_path

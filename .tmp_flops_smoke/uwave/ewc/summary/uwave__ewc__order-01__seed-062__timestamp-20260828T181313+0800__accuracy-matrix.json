@@ -1,0 +1,68 @@
+{
+  "dataset": "uwave",
+  "method": "ewc",
+  "order_id": 1,
+  "seed": 62,
+  "timestamp": "20260828T181313+0800",
+  "tasks": 6,
+  "orientation": "row=train experience end; column=evaluated test experience",
+  "upper_triangle": "null because the corresponding class experience had not been learned yet",
+  "test_samples_per_task": [
+    341,
+    127,
+    100,
+    112,
+    110,
+    106
+  ],
+  "accuracy_matrix_lower_triangular": [
+    [
+      0.6920821114369502,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      0.0,
+      1.0,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      null,
+      null,
+      null
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      null,
+      null
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      null
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ]
+}

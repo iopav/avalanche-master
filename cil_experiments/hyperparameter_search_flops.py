@@ -12,9 +12,10 @@ HYPERPARAMETER_SEARCH_FLOPS: dict[str, dict[str, int | None]] = {
     "spike": {
         "er_ace": None,
         "ewc": None,
-        "cwr_star": None,
+        "cwr_star": 0,
         "icarl": None,
         "fecam": None,
+        "tagfex": None,
     },
     "texture": {
         "er_ace": None,
@@ -22,6 +23,7 @@ HYPERPARAMETER_SEARCH_FLOPS: dict[str, dict[str, int | None]] = {
         "cwr_star": None,
         "icarl": None,
         "fecam": None,
+        "tagfex": None,
     },
     "uwave": {
         "er_ace": None,
@@ -29,6 +31,7 @@ HYPERPARAMETER_SEARCH_FLOPS: dict[str, dict[str, int | None]] = {
         "cwr_star": None,
         "icarl": None,
         "fecam": None,
+        "tagfex": None,
     },
 }
 

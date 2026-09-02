@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +22,14 @@ class DatasetSpec:
     num_classes: int
     timesteps: int
     in_channels: int
+    image_train_x: str
+    image_train_y: str
+    image_test_x: str
+    image_test_y: str
+    image_train_shape: tuple[int, int, int, int]
+    image_test_shape: tuple[int, int, int, int]
+    image_x_dtype: str
+    image_layout: str
 
 
 DATASETS = {
@@ -39,6 +45,14 @@ DATASETS = {
         num_classes=20,
         timesteps=400,
         in_channels=64,
+        image_train_x="spike/X_train_20_cla_400steps_img.npy",
+        image_train_y="spike/Y_train_20_cla_400steps_img.npy",
+        image_test_x="spike/X_test_20_cla_400steps_img.npy",
+        image_test_y="spike/Y_test_20_cla_400steps_img.npy",
+        image_train_shape=(3219, 3, 160, 160),
+        image_test_shape=(781, 3, 160, 160),
+        image_x_dtype="uint8",
+        image_layout="NCHW",
     ),
     "texture": DatasetSpec(
         name="texture",
@@ -52,6 +66,14 @@ DATASETS = {
         num_classes=12,
         timesteps=3775,
         in_channels=9,
+        image_train_x="texture/X_train_texture_img.npy",
+        image_train_y="texture/Y_train_texture_img.npy",
+        image_test_x="texture/X_test_texture_img.npy",
+        image_test_y="texture/Y_test_texture_img.npy",
+        image_train_shape=(960, 3, 185, 185),
+        image_test_shape=(240, 3, 185, 185),
+        image_x_dtype="float32",
+        image_layout="NCHW",
     ),
     "uwave": DatasetSpec(
         name="uwave",
@@ -65,6 +87,14 @@ DATASETS = {
         num_classes=8,
         timesteps=315,
         in_channels=3,
+        image_train_x="uwave/X_train_uwave_img.npy",
+        image_train_y="uwave/Y_train_uwave_img.npy",
+        image_test_x="uwave/X_test_uwave_img.npy",
+        image_test_y="uwave/Y_test_uwave_img.npy",
+        image_train_shape=(3582, 32, 32, 3),
+        image_test_shape=(896, 32, 32, 3),
+        image_x_dtype="float32",
+        image_layout="NHWC",
     ),
 }
 
@@ -104,17 +134,63 @@ METHODS: dict[str, dict[str, Any]] = {
         "covnorm": True,
         "source": "FeCAM classifier-incremental protocol; Avalanche classifier defaults except tukey disabled for signed shared features",
     },
+    "tagfex": {
+        "display_name": "TagFex",
+        "memory_size": 2000,
+        "contrast_factor": 1.0,
+        "contrast_kd_factor": 2.0,
+        "aux_factor": 2.0,
+        "trans_cls_factor": 1.0,
+        "transfer_factor": 1.0,
+        "infonce_temp": 0.2,
+        "infonce_kd_temp": 0.2,
+        "kd_temp": 2.0,
+        "proj_hidden_dim": 2048,
+        "proj_output_dim": 1024,
+        "interpolation_factor": 0.95,
+        "attention_heads": 8,
+        "source": "CVPR 2025 TagFex image-network structure, losses, expansion, herding and alignment ported to Avalanche",
+    },
 }
 
 
-BACKBONE_CONFIG = {
-    "hidden_channels": [64, 128, 128],
-    "kernels": [7, 5, 3],
-    "strides": [2, 2, 2],
-    "paddings": [3, 2, 1],
-    "group_norm_groups": 8,
-    "feature_dim": 64,
+# METHODS contains every strategy that can be constructed by shared tuning
+# code. Formal dataset entrypoints deliberately exclude EWC, which remains a
+# regularization-control experiment.
+FORMAL_METHODS = ("er_ace", "cwr_star", "icarl", "fecam", "tagfex")
+
+DEFAULT_BACKBONE_ID = "resnet18_cifar"
+DEFAULT_BACKBONES = {
+    "er_ace": DEFAULT_BACKBONE_ID,
+    "ewc": DEFAULT_BACKBONE_ID,
+    "cwr_star": DEFAULT_BACKBONE_ID,
+    "icarl": DEFAULT_BACKBONE_ID,
+    "fecam": DEFAULT_BACKBONE_ID,
+    "si": DEFAULT_BACKBONE_ID,
+    "lwf": DEFAULT_BACKBONE_ID,
+    "naive": DEFAULT_BACKBONE_ID,
+    "er": DEFAULT_BACKBONE_ID,
+    "tagfex": DEFAULT_BACKBONE_ID,
 }
+
+
+BACKBONE_CONFIGS = {
+    backbone_id: {
+        "backbone_id": backbone_id,
+        "base_width": base_width,
+        "stem": {"kernel": 3, "stride": 1, "max_pool": False},
+        "blocks_per_stage": [2, 2, 2, 2],
+        "stage_channels": [base_width * (2**index) for index in range(4)],
+        "feature_dim": base_width * 8,
+        "pretrained": False,
+    }
+    for backbone_id, base_width in (
+        ("resnet18_cifar_small", 32),
+        ("resnet18_cifar", 64),
+        ("resnet18_cifar_large", 96),
+    )
+}
+BACKBONE_CONFIG = BACKBONE_CONFIGS[DEFAULT_BACKBONE_ID]
 
 TRAINING_DEFAULTS = {
     "optimizer": "SGD",
@@ -169,19 +245,6 @@ def validate_order_registry() -> None:
 
 
 validate_order_registry()
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def canonical_hash(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def dataset_dict(spec: DatasetSpec) -> dict[str, Any]:

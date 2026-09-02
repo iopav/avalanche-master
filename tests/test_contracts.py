@@ -17,11 +17,16 @@ from cil_experiments.flops import (
     convolution_backward_flop,
     ExperienceFlopResult,
     mse_loss_flop,
+    log_softmax_flop,
+    logsumexp_flop,
     PhaseFlopProfiler,
     profile_single_forward,
     summarize_auxiliary_nonflop_ops,
     summarize_learning_flops,
+    softmax_backward_flop,
+    softmax_flop,
     variance_flop,
+    xlogy_flop,
 )
 from cil_experiments.final_hyperparameters import (
     FINAL_HYPERPARAMETERS,
@@ -29,8 +34,16 @@ from cil_experiments.final_hyperparameters import (
     validate_final_hyperparameter_registry,
 )
 from cil_experiments.metrics import compute_cil_metrics
-from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
+from cil_experiments.models import build_backbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
+from cil_experiments.replay_storage import (
+    Float32ClassBalancedBuffer,
+    Float32ReplayExample,
+    PackedBinaryExample,
+    PackedClassBalancedBuffer,
+    validate_uint8_one_hot,
+)
+from cil_experiments.storage import compute_persistent_storage
 from cil_experiments.registry import (
     DATASETS,
     METHODS,
@@ -54,11 +67,134 @@ PROJECT_ROOT = Path(r"D:\workspace\Avalanche\avalanche-master")
 
 
 class ProtocolContractTests(unittest.TestCase):
+    def test_spike_replay_uses_real_bit_packing_and_uint8_one_hot_labels(self):
+        sample = torch.tensor(
+            [[[0, 1, 0, 1], [1, 0, 1, 0]]], dtype=torch.float32
+        )
+        example = PackedBinaryExample.from_tensor(sample, label=2, num_classes=4)
+        self.assertEqual(example.data.dtype, np.uint8)
+        self.assertEqual(example.data.nbytes, 1)
+        self.assertEqual(example.label_one_hot.dtype, np.uint8)
+        self.assertEqual(example.label_one_hot.nbytes, 4)
+        self.assertEqual(example.label, 2)
+        torch.testing.assert_close(example.unpack(), sample)
+
+        validate_uint8_one_hot(np.eye(4, dtype=np.uint8), num_classes=4)
+        with self.assertRaises(AssertionError):
+            validate_uint8_one_hot(np.asarray([[1, 1, 0, 0]], dtype=np.uint8), 4)
+
+    def test_all_spike_replay_methods_select_packed_persistence(self):
+        erace = build_strategy(
+            "er_ace", 64, 1, torch.device("cpu"), "spike", enable_flop_accounting=False
+        )
+        icarl = build_strategy(
+            "icarl", 64, 1, torch.device("cpu"), "spike", enable_flop_accounting=False
+        )
+        tagfex = build_strategy(
+            "tagfex", 64, 1, torch.device("cpu"), "spike", enable_flop_accounting=False
+        )
+        self.assertIsInstance(erace.strategy.storage_policy, PackedClassBalancedBuffer)
+        self.assertTrue(icarl.method_plugin.pack_binary)
+        self.assertEqual(icarl.method_plugin.num_classes, 20)
+        self.assertTrue(tagfex.strategy.pack_binary_replay)
+        self.assertEqual(tagfex.strategy.num_classes, 20)
+
+        sample = torch.tensor([[0, 1, 0, 1], [1, 0, 1, 0]], dtype=torch.float32)
+
+        class _TinyDataset(torch.utils.data.Dataset):
+            targets = [2, 2]
+
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, index):
+                return sample.clone(), self.targets[index], 0
+
+        erace.strategy.storage_policy.post_adapt(None, type("Exp", (), {"dataset": _TinyDataset()})())
+        erace_examples = erace.strategy.storage_policy.persistent_examples()
+        self.assertEqual(len(erace_examples), 2)
+        self.assertTrue(all(isinstance(value, PackedBinaryExample) for value in erace_examples))
+        erace_storage = compute_persistent_storage(erace)
+        self.assertEqual(erace_storage["replay_sample_bytes"], 2)
+        self.assertEqual(erace_storage["replay_label_bytes"], 40)
+
+        icarl.method_plugin.x_memory = [torch.stack((sample, sample))]
+        icarl.method_plugin.y_memory = [np.asarray([1, 2], dtype=np.int64)]
+        icarl.method_plugin._pack_current_memory()
+        self.assertEqual(icarl.method_plugin.x_memory, [])
+        self.assertEqual(icarl.method_plugin.y_memory, [])
+        self.assertEqual(icarl.method_plugin.persistent_labels[0].dtype, np.uint8)
+        self.assertEqual(icarl.method_plugin.persistent_labels[0].shape, (2, 20))
+        icarl_storage = compute_persistent_storage(icarl)
+        self.assertEqual(icarl_storage["replay_sample_bytes"], 2)
+        self.assertEqual(icarl_storage["replay_label_bytes"], 40)
+
+        tagfex.strategy.memory_by_class = {2: [(sample.clone(), 2)]}
+        tagfex.strategy._persist_memory()
+        self.assertIsInstance(tagfex.strategy.memory_by_class[2][0], PackedBinaryExample)
+        tagfex_storage = compute_persistent_storage(tagfex)
+        self.assertEqual(tagfex_storage["replay_sample_bytes"], 1)
+        self.assertEqual(tagfex_storage["replay_label_bytes"], 20)
+        for storage in (erace_storage, icarl_storage, tagfex_storage):
+            self.assertEqual(storage["pulse_encoding"], "1-bit packed")
+            self.assertEqual(storage["label_encoding"], "uint8_one_hot")
+
+    def test_all_float_replay_methods_persist_uint8_one_hot_labels(self):
+        erace = build_strategy(
+            "er_ace", 9, 1, torch.device("cpu"), "texture", enable_flop_accounting=False
+        )
+        icarl = build_strategy(
+            "icarl", 9, 1, torch.device("cpu"), "texture", enable_flop_accounting=False
+        )
+        tagfex = build_strategy(
+            "tagfex", 9, 1, torch.device("cpu"), "texture", enable_flop_accounting=False
+        )
+        self.assertIsInstance(erace.strategy.storage_policy, Float32ClassBalancedBuffer)
+
+        sample = torch.arange(8, dtype=torch.float64).reshape(2, 4)
+
+        class _TinyDataset(torch.utils.data.Dataset):
+            targets = [2, 2]
+
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, index):
+                return sample.clone(), self.targets[index], 0
+
+        erace.strategy.storage_policy.post_adapt(None, type("Exp", (), {"dataset": _TinyDataset()})())
+        erace_examples = erace.strategy.storage_policy.persistent_examples()
+        self.assertTrue(all(isinstance(value, Float32ReplayExample) for value in erace_examples))
+        erace_storage = compute_persistent_storage(erace)
+        self.assertEqual(erace_storage["replay_sample_bytes"], 64)
+        self.assertEqual(erace_storage["replay_label_bytes"], 24)
+
+        icarl.method_plugin.x_memory = [torch.stack((sample, sample))]
+        icarl.method_plugin.y_memory = [np.asarray([1, 2], dtype=np.int64)]
+        icarl.method_plugin._pack_current_memory()
+        self.assertEqual(icarl.method_plugin.y_memory, [])
+        self.assertEqual(icarl.method_plugin.persistent_labels[0].shape, (2, 12))
+        icarl_storage = compute_persistent_storage(icarl)
+        self.assertEqual(icarl_storage["replay_sample_bytes"], 64)
+        self.assertEqual(icarl_storage["replay_label_bytes"], 24)
+
+        tagfex.strategy.memory_by_class = {2: [(sample.clone(), 2)]}
+        tagfex.strategy._persist_memory()
+        self.assertIsInstance(tagfex.strategy.memory_by_class[2][0], Float32ReplayExample)
+        tagfex_storage = compute_persistent_storage(tagfex)
+        self.assertEqual(tagfex_storage["replay_sample_bytes"], 32)
+        self.assertEqual(tagfex_storage["replay_label_bytes"], 12)
+        for storage in (erace_storage, icarl_storage, tagfex_storage):
+            self.assertEqual(storage["label_encoding"], "uint8_one_hot")
+        self.assertEqual(erace_storage["pulse_encoding"], "float32_input_image")
+        self.assertEqual(icarl_storage["pulse_encoding"], "float32_input_image")
+        self.assertEqual(tagfex_storage["pulse_encoding"], "float32_input_image")
+
     def test_order_seed_registry_matches_source(self):
         validate_order_registry()
         self.assertEqual(tuple(SEEDS), tuple(range(62, 72)))
-        self.assertEqual(ORDER_IDS, (1, 2, 3, 4, 5))
-        self.assertEqual(sum(len(orders) for orders in ORDERS_BY_DATASET.values()), 15)
+        self.assertEqual(ORDER_IDS, (1, 2, 3, 4, 5, 6, 7))
+        self.assertEqual(sum(len(orders) for orders in ORDERS_BY_DATASET.values()), 21)
         for dataset_name, spec in DATASETS.items():
             for order_id in ORDER_IDS:
                 self.assertEqual(
@@ -73,12 +209,11 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(DATASETS["spike"].timesteps, 400)
         self.assertEqual(DATASETS["spike"].train_shape[1], 400)
 
-    def test_backbones_differ_only_at_first_input_channels(self):
-        models = {name: TemporalBackbone(spec.in_channels) for name, spec in DATASETS.items()}
+    def test_registered_resnet18_contract(self):
         assert_shared_backbone_contract()
-        for name, spec in DATASETS.items():
-            output = models[name](torch.zeros(2, spec.in_channels, spec.timesteps))
-            self.assertEqual(tuple(output.shape), (2, 64))
+        model = build_backbone("resnet18_cifar", (3, 32, 32))
+        output = model(torch.zeros(2, 3, 32, 32))
+        self.assertEqual(tuple(output.shape), (2, 512))
 
     def test_metric_formulas_generalize_to_task_count(self):
         matrix = np.array([[0.8, np.nan, np.nan], [0.7, 0.9, np.nan], [0.6, 0.8, 1.0]])
@@ -94,6 +229,22 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(total, 2 * 1 * 4 * 8 + 4)
         self.assertEqual(detail["flops"], total)
 
+    def test_single_forward_profiles_eval_behavior_and_restores_model_mode(self):
+        class _ModeProbe(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(8, 4)
+                self.forward_training_mode = None
+
+            def forward(self, value):
+                self.forward_training_mode = self.training
+                return self.linear(value)
+
+        model = _ModeProbe().train()
+        profile_single_forward(model, torch.zeros(1, 8))
+        self.assertFalse(model.forward_training_mode)
+        self.assertTrue(model.training)
+
     def test_locked_affine_and_adaptive_average_pool_formulas(self):
         self.assertEqual(add_like_flop((10,), out_shape=(10,)), 10)
         self.assertEqual(add_like_flop((10,), out_shape=(10,), alpha=-0.1), 20)
@@ -104,6 +255,8 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(variance_flop((2, 4), out_shape=()), 32)
         self.assertEqual(mse_loss_flop((2, 4), (2, 4), 0), 16)
         self.assertEqual(mse_loss_flop((2, 4), (2, 4), 1), 24)
+        self.assertEqual(logsumexp_flop((2, 4), [-1], out_shape=(2,)), 26)
+        self.assertEqual(xlogy_flop((2, 4), (2, 4), out_shape=(2, 4)), 16)
 
     def test_convolution_backward_counts_bias_reduction(self):
         # Conv1d: input [1,2,4], weight [3,2,1], output [1,3,4].
@@ -124,40 +277,37 @@ class ProtocolContractTests(unittest.TestCase):
         )
         self.assertEqual(total, 105)
 
-    def test_phase_profiler_separates_conv_forward_loss_and_backward(self):
+    def test_softmax_formulas_remove_one_overcount_per_reduction_group(self):
+        shape = (2, 3, 4)
+        self.assertEqual(softmax_flop(shape, 1), 4 * 24 - 8)
+        self.assertEqual(log_softmax_flop(shape, 1), 4 * 24)
+        self.assertEqual(softmax_backward_flop(shape, shape, 1), 4 * 24 - 8)
+
+    def test_phase_profiler_keeps_the_complete_optimizer_iteration_in_core(self):
         model = torch.nn.Conv1d(2, 3, kernel_size=1, bias=True)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
         sample = torch.ones(1, 2, 4, requires_grad=True)
         profiler = PhaseFlopProfiler()
         profiler.start()
         profiler.begin_epoch()
-        profiler.switch("student_current_forward")
+        profiler.switch("core_training")
         output = model(sample)
-        profiler.switch("loss_and_regularization")
         loss = output.sum()
-        profiler.switch("backward")
         loss.backward()
-        profiler.switch("optimizer_update")
         optimizer.step()
         profiler.add_processed_samples(1)
         profiler.end_epoch()
         result = profiler.stop(strict=True)
-        self.assertEqual(result.phase_flops["student_current_forward"], 60)
-        self.assertEqual(result.phase_flops["loss_and_regularization"], 11)
-        self.assertEqual(result.phase_flops["backward"], 105)
-        self.assertEqual(result.phase_flops["optimizer_update"], 18)
+        self.assertEqual(set(result.phase_flops), {"core_training"})
+        self.assertEqual(result.phase_flops["core_training"], 194)
         self.assertEqual(result.total_flops, 194)
 
     def test_learning_flop_summary_is_an_exact_phase_partition(self):
         result = ExperienceFlopResult(
             total_flops=204,
             phase_flops={
-                "student_current_forward": 60,
-                "loss_and_regularization": 11,
-                "backward": 105,
-                "optimizer_update": 18,
-                "replay_forward": 7,
-                "method_specific": 3,
+                "core_training": 194,
+                "learning_auxiliary": 10,
             },
             terminal_epoch_flops=204,
             terminal_epoch_samples=1,
@@ -188,11 +338,32 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(nonflop["total_recorded_events"], 7)
 
     def test_registry_uses_er_ace_with_isolated_buffer(self):
-        self.assertEqual(set(METHODS), {"er_ace", "ewc", "cwr_star", "icarl", "fecam"})
+        self.assertEqual(
+            set(METHODS), {"er_ace", "ewc", "cwr_star", "icarl", "fecam", "tagfex"}
+        )
         first = build_strategy("er_ace", 3, 1, torch.device("cpu"), "uwave")
         second = build_strategy("er_ace", 3, 1, torch.device("cpu"), "uwave")
         self.assertIsNot(first.strategy.storage_policy, second.strategy.storage_policy)
         self.assertEqual(first.strategy.mem_size, 200)
+
+    def test_tagfex_is_a_registered_source_structure_image_strategy(self):
+        bundle = build_strategy(
+            "tagfex", 3, 1, torch.device("cpu"), "uwave", enable_flop_accounting=False
+        )
+        bundle.strategy.model.update_network(3)
+        bundle.strategy.model.eval()
+        output = bundle.strategy.model(torch.zeros(2, 3, 32, 32))
+        self.assertEqual(bundle.method, "tagfex")
+        self.assertEqual(tuple(output["logits"].shape), (2, 3))
+        self.assertEqual(tuple(output["ts_features"][0].shape), (2, 512))
+        self.assertEqual(
+            bundle.network_summary(6),
+            {
+                "final_hidden_neurons": 512,
+                "total_new_neurons": 0,
+                "total_reused_neurons": 0,
+            },
+        )
 
     def test_si_is_available_only_through_the_manual_candidate_builder(self):
         self.assertNotIn("si", METHODS)
@@ -232,10 +403,10 @@ class ProtocolContractTests(unittest.TestCase):
         classifier = bundle.strategy.model.classifier
         classifier.adaptation(SimpleNamespace(classes_in_this_experience=[0, 1, 2]))
         first_names = set(dict(bundle.strategy.model.named_parameters()))
-        first_output = bundle.strategy.model(torch.zeros(2, 3, 315))
+        first_output = bundle.strategy.model(torch.zeros(2, 3, 32, 32))
         classifier.adaptation(SimpleNamespace(classes_in_this_experience=[3]))
         second_names = set(dict(bundle.strategy.model.named_parameters()))
-        second_output = bundle.strategy.model(torch.zeros(2, 3, 315))
+        second_output = bundle.strategy.model(torch.zeros(2, 3, 32, 32))
         self.assertEqual(bundle.method, "ewc_cosine")
         self.assertIsNone(bundle.phase_plugin)
         self.assertEqual(bundle.method_plugin.ewc_lambda, 1.0)
@@ -308,8 +479,8 @@ class ProtocolContractTests(unittest.TestCase):
         plugin.before_training_exp(strategy)
         self.assertEqual(strategy.train_epochs, 0)
         self.assertTrue(all(not p.requires_grad for p in strategy.model.feature_extractor.parameters()))
-        self.assertIsInstance(strategy.model.train_classifier, torch.nn.Linear)
-        self.assertEqual(strategy.model.train_classifier.out_features, 3)
+        self.assertEqual(strategy.model.train_classifier.__class__.__name__, "IncrementalClassifier")
+        self.assertEqual(strategy.model.train_classifier.classifier.out_features, 1)
 
     def test_manual_tuning_has_one_flop_free_entry_per_dataset_method(self):
         manual_root = PROJECT_ROOT / "manual_tuning"

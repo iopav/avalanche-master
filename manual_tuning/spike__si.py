@@ -14,7 +14,7 @@ PARAMETERS = {
 
 # ORDER_ID 决定类别到达顺序，SEED 控制训练随机性；比较候选参数时保持二者不变。
 # EPOCHS 与正式轻量协议一致，DEVICE 固定为 CUDA。手工调参不会计算 FLOPs 或保存 JSON。
-ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 1, "cuda"
+ORDER_ID, SEED, EPOCHS, DEVICE = 6, 62, 1, "cuda"
 
 if __name__ == "__main__":
     run_manual(dataset="spike", method="si", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE)

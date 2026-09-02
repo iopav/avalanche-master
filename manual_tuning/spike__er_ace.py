@@ -13,7 +13,7 @@ PARAMETERS = {
 
 # 比较候选参数时保持 ORDER_ID 和 SEED 不变。增大 EPOCHS 会增加优化步数，
 # 同时增加耗时和过拟合风险。显式指定 CUDA 可防止静默回退到 CPU。
-ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 10, "cuda"
+ORDER_ID, SEED, EPOCHS, DEVICE = 1, 62, 15, "cuda"
 
 if __name__ == "__main__":
     run_manual(dataset="spike", method="er_ace", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE)

@@ -11,7 +11,7 @@ import torch
 from cil_experiments.data import validate_source_files
 from cil_experiments.flops import profile_single_forward
 from cil_experiments.metrics import compute_cil_metrics
-from cil_experiments.models import TemporalBackbone, assert_shared_backbone_contract
+from cil_experiments.models import build_backbone, assert_shared_backbone_contract
 from cil_experiments.output import AtomicRunArtifacts
 from cil_experiments.registry import (
     DATASETS,
@@ -29,8 +29,8 @@ class ProtocolContractTests(unittest.TestCase):
     def test_order_seed_registry_matches_source(self):
         validate_order_registry()
         self.assertEqual(tuple(SEEDS), tuple(range(62, 72)))
-        self.assertEqual(ORDER_IDS, (1, 2, 3, 4, 5))
-        self.assertEqual(sum(len(orders) for orders in ORDERS_BY_DATASET.values()), 15)
+        self.assertEqual(ORDER_IDS, (1, 2, 3, 4, 5, 6, 7))
+        self.assertEqual(sum(len(orders) for orders in ORDERS_BY_DATASET.values()), 21)
 
     def test_source_array_contracts_and_spike_400(self):
         for spec in DATASETS.values():
@@ -38,12 +38,11 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertEqual(DATASETS["spike"].timesteps, 400)
         self.assertEqual(DATASETS["spike"].train_shape[1], 400)
 
-    def test_backbones_differ_only_at_first_input_channels(self):
-        models = {name: TemporalBackbone(spec.in_channels) for name, spec in DATASETS.items()}
+    def test_registered_resnet18_contract(self):
         assert_shared_backbone_contract()
-        for name, spec in DATASETS.items():
-            output = models[name](torch.zeros(2, spec.in_channels, spec.timesteps))
-            self.assertEqual(tuple(output.shape), (2, 64))
+        model = build_backbone("resnet18_cifar", (3, 32, 32))
+        output = model(torch.zeros(2, 3, 32, 32))
+        self.assertEqual(tuple(output.shape), (2, 512))
 
     def test_metric_formulas_generalize_to_task_count(self):
         matrix = np.array([[0.8, np.nan, np.nan], [0.7, 0.9, np.nan], [0.6, 0.8, 1.0]])

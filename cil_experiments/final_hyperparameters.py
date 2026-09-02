@@ -9,14 +9,20 @@ independent and do not modify this registry automatically.
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 from typing import Any
 
 
-# Keep False while any of the 15 entries is still a provisional tuning value.
+# Keep False while any of the 18 entries is still a provisional tuning value.
 # Set True only after all dataset-method entries have been reviewed and finalized.
+# These values predate the selectable image-backbone migration and are retained
+# only as initial candidates. The registry stays unlocked until every
+# dataset-method-backbone setting has been revalidated.
 FINAL_HYPERPARAMETERS_LOCKED = False
+
+
+def is_final_hyperparameters_locked(method: str) -> bool:
+    """Every formal method now uses a migrated, selectable image backbone."""
+    return FINAL_HYPERPARAMETERS_LOCKED
 
 
 # Shared keys are repeated deliberately: each dataset-method entry is a complete,
@@ -26,8 +32,8 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
         "er_ace": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
-            "memory_size": 200, "batch_size_mem": 10,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 15,
+            "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
@@ -36,31 +42,42 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 50,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
+            "optimizer": "SGD", "learning_rate": 0.15, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 50,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
+            "optimizer": "SGD", "learning_rate": 0.003, "momentum": 0.0,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 1,
+            "tukey": False, "shrinkage": True, "shrink1": 1.0,
+            "shrink2": 1.0, "covnorm": True,
+        },
+        "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
             "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
-            "tukey": False, "shrinkage": True, "shrink1": 1.0,
-            "shrink2": 1.0, "covnorm": True,
+            "memory_size": 2000, "contrast_factor": 1.0,
+            "contrast_kd_factor": 2.0, "aux_factor": 2.0,
+            "trans_cls_factor": 0.005, "transfer_factor": 1.0,
+            "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
+            "proj_hidden_dim": 2048, "proj_output_dim": 1024,
+            "interpolation_factor": 0.95, "attention_heads": 8,
         },
     },
     "texture": {
         "er_ace": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
-            "memory_size": 200, "batch_size_mem": 10,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 10,
+            "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
@@ -71,29 +88,40 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
         "cwr_star": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 45,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 30,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 1,
             "tukey": False, "shrinkage": True, "shrink1": 1.0,
             "shrink2": 1.0, "covnorm": True,
+        },
+        "tagfex": {
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "memory_size": 2000, "contrast_factor": 1.0,
+            "contrast_kd_factor": 2.0, "aux_factor": 2.0,
+            "trans_cls_factor": 0.005, "transfer_factor": 1.0,
+            "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
+            "proj_hidden_dim": 2048, "proj_output_dim": 1024,
+            "interpolation_factor": 0.95, "attention_heads": 8,
         },
     },
     "uwave": {
         "er_ace": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
-            "memory_size": 200, "batch_size_mem": 10,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 15,
+            "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
@@ -102,23 +130,34 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 7,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 30,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
+            "optimizer": "SGD", "learning_rate": 0.03, "momentum": 0.0,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
+            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 40,
+            "tukey": False, "shrinkage": True, "shrink1": 0.5,
+            "shrink2": 0.5, "covnorm": True,
+        },
+        "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
             "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
             "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
-            "tukey": False, "shrinkage": True, "shrink1": 1.0,
-            "shrink2": 1.0, "covnorm": True,
+            "memory_size": 2000, "contrast_factor": 1.0,
+            "contrast_kd_factor": 2.0, "aux_factor": 2.0,
+            "trans_cls_factor": 0.005, "transfer_factor": 1.0,
+            "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
+            "proj_hidden_dim": 2048, "proj_output_dim": 1024,
+            "interpolation_factor": 0.95, "attention_heads": 8,
         },
     },
 }
@@ -134,6 +173,12 @@ METHOD_KEYS = {
     "cwr_star": {"cwr_layer_name"},
     "icarl": {"memory_size", "fixed_memory"},
     "fecam": {"tukey", "shrinkage", "shrink1", "shrink2", "covnorm"},
+    "tagfex": {
+        "memory_size", "contrast_factor", "contrast_kd_factor", "aux_factor",
+        "trans_cls_factor", "transfer_factor", "infonce_temp", "infonce_kd_temp",
+        "kd_temp", "proj_hidden_dim", "proj_output_dim", "interpolation_factor",
+        "attention_heads",
+    },
 }
 
 
@@ -158,7 +203,7 @@ def validate_final_hyperparameter_entry(
             raise ValueError(f"{dataset}/{method} requires {key} > 0")
     if int(parameters["num_workers"]) < 0:
         raise ValueError(f"{dataset}/{method} requires num_workers >= 0")
-    if method in {"er_ace", "icarl"}:
+    if method in {"er_ace", "icarl", "tagfex"}:
         memory_size = int(parameters["memory_size"])
         if memory_size <= 0 or memory_size > 2000:
             raise ValueError(f"{dataset}/{method} memory_size must be in [1, 2000]")
@@ -178,6 +223,20 @@ def validate_final_hyperparameter_entry(
     if method == "fecam":
         if float(parameters["shrink1"]) < 0 or float(parameters["shrink2"]) < 0:
             raise ValueError("FeCAM shrink strengths must be non-negative")
+    if method == "tagfex":
+        for key in (
+            "contrast_factor", "contrast_kd_factor", "aux_factor", "trans_cls_factor",
+            "transfer_factor", "infonce_temp", "infonce_kd_temp", "kd_temp",
+        ):
+            if float(parameters[key]) <= 0:
+                raise ValueError(f"{dataset}/{method} requires {key} > 0")
+        if int(parameters["proj_hidden_dim"]) <= 0 or int(parameters["proj_output_dim"]) <= 0:
+            raise ValueError("TagFex projector dimensions must be positive")
+        if not 0.0 <= float(parameters["interpolation_factor"]) <= 1.0:
+            raise ValueError("TagFex interpolation_factor must be in [0, 1]")
+        heads = int(parameters["attention_heads"])
+        if heads <= 0 or 64 % heads:
+            raise ValueError("TagFex attention_heads must be a positive divisor of 64")
 
 
 def get_final_hyperparameters(
@@ -186,9 +245,9 @@ def get_final_hyperparameters(
     overrides: dict[str, Any] | None = None,
     require_locked: bool = False,
 ) -> dict[str, Any]:
-    if require_locked and not FINAL_HYPERPARAMETERS_LOCKED:
+    if require_locked and not is_final_hyperparameters_locked(method):
         raise RuntimeError(
-            "Formal hyperparameters are not locked. Fill all 15 entries in "
+            "Migrated-backbone hyperparameters are not locked. Revalidate the affected entries in "
             "cil_experiments/final_hyperparameters.py, then set "
             "FINAL_HYPERPARAMETERS_LOCKED = True."
         )
@@ -203,11 +262,6 @@ def get_final_hyperparameters(
         parameters.update(copy.deepcopy(overrides))
     validate_final_hyperparameter_entry(dataset, method, parameters)
     return parameters
-
-
-def final_hyperparameter_hash(parameters: dict[str, Any]) -> str:
-    payload = json.dumps(parameters, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def validate_final_hyperparameter_registry() -> None:
