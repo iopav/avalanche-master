@@ -19,6 +19,7 @@ from .flops import (
     summarize_learning_flops,
 )
 from .final_hyperparameters import get_final_hyperparameters, is_final_hyperparameters_locked
+from .experiment_config import EXPERIMENT_ID, validate_experiment_id
 from .hyperparameter_search_flops import get_hyperparameter_search_flops
 from .intransigence import (
     fill_intransigence,
@@ -27,7 +28,7 @@ from .intransigence import (
 )
 from .metrics import compute_cil_metrics, validate_summary
 from .models import BACKBONES
-from .output import AtomicRunArtifacts
+from .output import AtomicRunArtifacts, completed_summary_path
 from .registry import (
     DATASETS,
     DEFAULT_BACKBONES,
@@ -197,7 +198,15 @@ def make_config(
     task_groups = get_task_groups(dataset_name, order_id)
     class_split = get_task_split(dataset_name, order_id)
     effective_sgd_epochs = [int(epochs)] * len(task_groups)
-    if method == "fecam":
+    if method == "tagfex":
+        effective_sgd_epochs = [
+            int(resolved_hyperparameters["init_epochs"]),
+            *(
+                [int(resolved_hyperparameters["inc_epochs"])]
+                * (len(task_groups) - 1)
+            ),
+        ]
+    elif method == "fecam":
         effective_sgd_epochs[1:] = [0] * (len(task_groups) - 1)
     resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[method]
     backbone_spec = BACKBONES[resolved_backbone_id]
@@ -367,7 +376,10 @@ def run_one(
     backbone_id: str | None = None,
     compute_intransigence_enabled: bool = True,
     joint_summary_path: Path | None = None,
+    experiment_id: int = EXPERIMENT_ID,
+    resume: bool = False,
 ) -> Path:
+    experiment_id = validate_experiment_id(experiment_id)
     if seed not in SEEDS:
         raise ValueError(f"Seed {seed} is not in the locked seed registry")
     if order_id not in ORDER_IDS:
@@ -409,6 +421,7 @@ def run_one(
         resolved_backbone_id,
         data.input_view_id,
     )
+    config["experiment_id"] = experiment_id
     matched_joint_summary = None
     if compute_intransigence_enabled:
         matched_joint_summary = (
@@ -420,6 +433,7 @@ def run_one(
                 paired_method=method,
                 order_id=order_id,
                 seed=seed,
+                experiment_id=experiment_id,
             )
         )
     config["intransigence"] = {
@@ -441,12 +455,39 @@ def run_one(
                 "order_id": int(order_id),
                 "seed": int(seed),
                 "tasks": int(data.tasks),
+                "experiment_id": experiment_id,
             },
             config,
             matched_joint_summary,
         )
+    if resume and not overwrite:
+        completed = completed_summary_path(
+            result_root,
+            dataset_name,
+            method,
+            order_id,
+            seed,
+            experiment_id,
+            expected_config=config,
+        )
+        if completed is not None:
+            print(
+                "SKIP completed "
+                f"exp={experiment_id} dataset={dataset_name} method={method} "
+                f"order={order_id} seed={seed}: {completed}"
+            )
+            return completed
 
-    with AtomicRunArtifacts(result_root, dataset_name, method, order_id, seed, config, overwrite) as artifacts:
+    with AtomicRunArtifacts(
+        result_root,
+        dataset_name,
+        method,
+        order_id,
+        seed,
+        config,
+        overwrite,
+        experiment_id,
+    ) as artifacts:
         log = artifacts.logger
         assert log is not None
         log.info("run=%s dataset=%s method=%s order_id=%d seed=%d epochs=%d device=%s", artifacts.summary_path.stem, dataset_name, method, order_id, seed, epochs, device)
@@ -551,7 +592,6 @@ def run_one(
         incremental = task_wall[1:]
         flop_summary = summarize_learning_flops(
             task_flops,
-            hyperparameter_search_flops,
             single_forward_flops,
         )
         summary = {
@@ -569,7 +609,6 @@ def run_one(
                 "median_incremental_task_s": float(statistics.median(incremental)),
             },
             "training_operations": {
-                "estimated_cumulative_dense_flops": int(sum(item.total_flops for item in task_flops)),
                 "task_summed_terminal_flops_per_sample": float(sum(terminal_values)),
                 **flop_summary,
                 "auxiliary_nonflop_ops": summarize_auxiliary_nonflop_ops(task_flops),
@@ -598,7 +637,7 @@ def run_one(
             "input_view_id": data.input_view_id,
             "order_id": int(order_id),
             "seed": int(seed),
-            "timestamp": artifacts.timestamp,
+            "experiment_id": experiment_id,
             "tasks": int(data.tasks),
             "orientation": "row=train experience end; column=evaluated test experience",
             "upper_triangle": "null because the corresponding class experience had not been learned yet",

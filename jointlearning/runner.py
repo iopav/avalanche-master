@@ -13,6 +13,7 @@ from torch.optim import SGD
 from torch.utils.data import ConcatDataset, DataLoader
 
 from cil_experiments.data import build_dataset_bundle
+from cil_experiments.experiment_config import EXPERIMENT_ID, validate_experiment_id
 from cil_experiments.final_hyperparameters import get_final_hyperparameters
 from cil_experiments.flops import (
     PhaseFlopProfiler,
@@ -22,7 +23,7 @@ from cil_experiments.flops import (
 )
 from cil_experiments.metrics import compute_cil_metrics, validate_summary
 from cil_experiments.models import BACKBONES, build_feature_extractor
-from cil_experiments.output import AtomicRunArtifacts
+from cil_experiments.output import AtomicRunArtifacts, completed_summary_path
 from cil_experiments.registry import DATASETS, DEFAULT_BACKBONES, get_task_groups
 from cil_experiments.runner import (
     _evaluate_experience,
@@ -183,7 +184,10 @@ def run_joint_reference(
     backbone_id: str | None = None,
     parameters: dict[str, Any] | None = None,
     overwrite: bool = False,
+    experiment_id: int = EXPERIMENT_ID,
+    resume: bool = False,
 ) -> Path:
+    experiment_id = validate_experiment_id(experiment_id)
     if paired_method not in DEFAULT_BACKBONES:
         raise ValueError(f"Unknown paired method: {paired_method}")
     resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[paired_method]
@@ -205,6 +209,7 @@ def run_joint_reference(
     method_name = f"joint_{paired_method}"
     config = {
         "schema": "metrics1.docx-compatible-joint-reference-v1",
+        "experiment_id": experiment_id,
         "dataset": dataset_name,
         "method": method_name,
         "paired_method": paired_method,
@@ -235,6 +240,23 @@ def run_joint_reference(
         },
         "protocol": {"input_view_id": data.input_view_id, "replay": None},
     }
+    if resume and not overwrite:
+        completed = completed_summary_path(
+            result_root,
+            dataset_name,
+            method_name,
+            order_id,
+            seed,
+            experiment_id,
+            expected_config=config,
+        )
+        if completed is not None:
+            print(
+                "SKIP completed "
+                f"exp={experiment_id} dataset={dataset_name} method={method_name} "
+                f"order={order_id} seed={seed}: {completed}"
+            )
+            return completed
     with AtomicRunArtifacts(
         result_root,
         dataset_name,
@@ -243,6 +265,7 @@ def run_joint_reference(
         seed,
         config,
         overwrite,
+        experiment_id,
     ) as artifacts:
         matrix = np.full((data.tasks, data.tasks), np.nan, dtype=np.float64)
         seen_datasets = []
@@ -310,7 +333,7 @@ def run_joint_reference(
         cil = compute_cil_metrics(matrix, data.test_samples_per_task)
         cil["intransigence"] = [0.0] * data.tasks
         incremental = task_seconds[1:]
-        flop_summary = summarize_learning_flops(task_flops, 0, single_flops)
+        flop_summary = summarize_learning_flops(task_flops, single_flops)
         final_feature_dim = int(getattr(model, "feature_dim"))
         summary = {
             "method": f"Joint({paired_method})",
@@ -337,7 +360,6 @@ def run_joint_reference(
                 "median_incremental_task_s": float(statistics.median(incremental)),
             },
             "training_operations": {
-                "estimated_cumulative_dense_flops": int(sum(x.total_flops for x in task_flops)),
                 "task_summed_terminal_flops_per_sample": float(sum(terminal_values)),
                 **flop_summary,
                 "auxiliary_nonflop_ops": summarize_auxiliary_nonflop_ops(task_flops),
@@ -364,7 +386,7 @@ def run_joint_reference(
             "input_view_id": data.input_view_id,
             "order_id": int(order_id),
             "seed": int(seed),
-            "timestamp": artifacts.timestamp,
+            "experiment_id": experiment_id,
             "tasks": int(data.tasks),
             "orientation": "row=cumulative Joint stage; column=evaluated test experience",
             "test_samples_per_task": [int(value) for value in data.test_samples_per_task],

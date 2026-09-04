@@ -6,21 +6,115 @@ import os
 import shutil
 import sys
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from .experiment_config import EXPERIMENT_ID, validate_experiment_id
 
 def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False, allow_nan=False) + "\n"
 
 
 def local_timestamp() -> str:
-    """Windows-safe, timezone-bearing timestamp shared by one artifact transaction."""
+    """Timestamp retained only for hyperparameter-search diagnostics."""
     return datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%z")
 
 
+@dataclass(frozen=True)
+class RunArtifactPaths:
+    method_root: Path
+    log: Path
+    summary: Path
+    accuracy_matrix: Path
+    config: Path
+
+
+def run_artifact_paths(
+    result_root: Path,
+    dataset: str,
+    method: str,
+    order_id: int,
+    seed: int,
+    experiment_id: int,
+) -> RunArtifactPaths:
+    experiment_id = validate_experiment_id(experiment_id)
+    method_root = result_root / dataset / method
+    stem = (
+        f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
+        f"__exp-{experiment_id}"
+    )
+    return RunArtifactPaths(
+        method_root=method_root,
+        log=method_root / "log" / f"{stem}.log",
+        summary=method_root / "summary" / f"{stem}__summary.json",
+        accuracy_matrix=method_root / "summary" / f"{stem}__accuracy-matrix.json",
+        config=method_root / f"{stem}__config.json",
+    )
+
+
+def completed_summary_path(
+    result_root: Path,
+    dataset: str,
+    method: str,
+    order_id: int,
+    seed: int,
+    experiment_id: int,
+    expected_config: dict[str, Any] | None = None,
+) -> Path | None:
+    """Return a validated completed run, or None when no public artifact exists."""
+    paths = run_artifact_paths(
+        result_root, dataset, method, order_id, seed, experiment_id
+    )
+    required = (paths.log, paths.summary, paths.accuracy_matrix, paths.config)
+    existing = [path for path in required if path.is_file()]
+    if not existing:
+        return None
+    if len(existing) != len(required):
+        missing = [str(path) for path in required if not path.is_file()]
+        raise RuntimeError(
+            "Incomplete public artifact set; rerun this small experiment with "
+            f"--overwrite. Missing: {missing}"
+        )
+    from .metrics import validate_summary
+
+    summary = json.loads(paths.summary.read_text(encoding="utf-8"))
+    matrix = json.loads(paths.accuracy_matrix.read_text(encoding="utf-8"))
+    config = json.loads(paths.config.read_text(encoding="utf-8"))
+    validate_summary(summary, allow_pending_intransigence=True)
+    expected_matrix = {
+        "dataset": dataset,
+        "method": method,
+        "order_id": int(order_id),
+        "seed": int(seed),
+        "experiment_id": int(experiment_id),
+    }
+    mismatches = {
+        key: (matrix.get(key), expected)
+        for key, expected in expected_matrix.items()
+        if matrix.get(key) != expected
+    }
+    if config.get("experiment_id") != int(experiment_id):
+        mismatches["config.experiment_id"] = (
+            config.get("experiment_id"), int(experiment_id)
+        )
+    normalized_expected_config = (
+        json.loads(json_text(expected_config)) if expected_config is not None else None
+    )
+    if normalized_expected_config is not None and config != normalized_expected_config:
+        raise ValueError(
+            "A completed run exists for this experiment ID, but its config differs. "
+            "Use a new EXPERIMENT_ID for a new configuration or pass --overwrite "
+            "to replace this exact small experiment."
+        )
+    if mismatches:
+        raise ValueError(f"Completed artifact identity mismatch: {mismatches}")
+    return paths.summary
+
+
 class AtomicRunArtifacts:
-    """Stage a run outside result/ and publish only after every validation passes."""
+    """Stage a run in a temporary directory and publish only after validation."""
 
     def __init__(
         self,
@@ -31,15 +125,17 @@ class AtomicRunArtifacts:
         seed: int,
         config: dict[str, Any],
         overwrite: bool = False,
-        timestamp: str | None = None,
+        experiment_id: int = EXPERIMENT_ID,
     ):
-        self.method_root = result_root / dataset / method
-        self.timestamp = timestamp or local_timestamp()
-        stem = f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}__timestamp-{self.timestamp}"
-        self.log_path = self.method_root / "log" / f"{stem}.log"
-        self.summary_path = self.method_root / "summary" / f"{stem}__summary.json"
-        self.accuracy_matrix_path = self.method_root / "summary" / f"{stem}__accuracy-matrix.json"
-        self.config_path = self.method_root / f"{stem}__config.json"
+        self.experiment_id = validate_experiment_id(experiment_id)
+        paths = run_artifact_paths(
+            result_root, dataset, method, order_id, seed, self.experiment_id
+        )
+        self.method_root = paths.method_root
+        self.log_path = paths.log
+        self.summary_path = paths.summary
+        self.accuracy_matrix_path = paths.accuracy_matrix
+        self.config_path = paths.config
         self.overwrite = overwrite
         self.config = dict(config)
         self.temp_dir: Path | None = None

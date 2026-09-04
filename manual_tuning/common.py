@@ -54,9 +54,18 @@ def _set_determinism(seed: int) -> None:
     torch.use_deterministic_algorithms(True, warn_only=False)
 
 
-def _evaluate(model, experience, device: torch.device, batch_size: int) -> float:
+def _evaluate(
+    model,
+    experience,
+    device: torch.device,
+    batch_size: int,
+    num_workers: int = 0,
+) -> float:
     loader = DataLoader(
-        experience.dataset.eval(), batch_size=batch_size, shuffle=False, num_workers=0
+        experience.dataset.eval(),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
     )
     was_training = model.training
     model.eval()
@@ -268,7 +277,7 @@ def run_manual(
         print(
             f"dataset={dataset} method={method} order_id={order_id} seed={seed} "
             f"epochs={epochs} device={resolved_device} device_name={device_name} "
-            f"backbone_id={resolved_backbone_id} data_variant={'mini_5pct' if use_mini else 'full'} "
+            f"backbone_id={resolved_backbone_id} data_variant={'mini_50pct' if use_mini else 'full'} "
             f"parameters={parameters}",
             flush=True,
         )
@@ -278,7 +287,7 @@ def run_manual(
         for task_index, experience in enumerate(data.benchmark.train_stream):
             bundle.strategy.train(
                 experience,
-                num_workers=0,
+                num_workers=int(TRAINING_DEFAULTS["num_workers"]),
                 pin_memory=resolved_device.type == "cuda",
             )
             for test_index in range(task_index + 1):
@@ -287,6 +296,7 @@ def run_manual(
                     data.benchmark.test_stream[test_index],
                     resolved_device,
                     int(TRAINING_DEFAULTS["eval_mb_size"]),
+                    int(TRAINING_DEFAULTS["num_workers"]),
                 )
         # 全部训练和评估结束后再用一次 stdout 写入打印完整矩阵，避免训练阶段产生的
         # warning 或 stderr 信息插入矩阵各行。真实异常仍按原逻辑输出 traceback。
@@ -324,3 +334,31 @@ def run_manual(
         return matrix.copy()
     finally:
         _restore_parameters(method, snapshots)
+
+
+def run_manual_entry(
+    *,
+    dataset: str,
+    method: str,
+    parameters: dict[str, Any],
+    order_id: int,
+    seed: int,
+    epochs: int,
+    device: str,
+    data_mode: str,
+    backbone_id: str,
+) -> np.ndarray:
+    """Run one editable script using its in-file data and backbone settings."""
+    if data_mode not in {"mini", "full"}:
+        raise ValueError("DATA_MODE must be 'mini' or 'full'")
+    return run_manual(
+        dataset=dataset,
+        method=method,
+        parameters=parameters,
+        order_id=order_id,
+        seed=seed,
+        epochs=epochs,
+        device=device,
+        backbone_id=backbone_id,
+        use_mini=data_mode == "mini",
+    )

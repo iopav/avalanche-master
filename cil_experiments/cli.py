@@ -7,12 +7,18 @@ from pathlib import Path
 
 import torch
 
+from .experiment_config import EXPERIMENT_ID, experiment_result_root
 from .registry import FORMAL_METHODS
 from .runner import run_one
 
 
 def run_dataset_cli(dataset_name: str) -> int:
-    parser = argparse.ArgumentParser(description=f"Run auditable {dataset_name} CIL experiments")
+    parser = argparse.ArgumentParser(
+        description=(
+            f"Run auditable {dataset_name} CIL experiments. Completed small "
+            "experiments in the configured result-exp folder are skipped automatically."
+        )
+    )
     parser.add_argument(
         "--methods", nargs="+", default=list(FORMAL_METHODS), choices=list(FORMAL_METHODS)
     )
@@ -37,11 +43,18 @@ def run_dataset_cli(dataset_name: str) -> int:
             "cil_performance.intransigence=null and is not eligible for final aggregation."
         ),
     )
-    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Rerun and replace an existing artifact for the same experiment/order/seed/method.",
+    )
     args = parser.parse_args()
     project_root = args.project_root.resolve()
     dataset_root = (args.dataset_root or project_root / "dataset").resolve()
-    output_root = (args.output_root or project_root / "result").resolve()
+    output_root = (
+        args.output_root or experiment_result_root(project_root, EXPERIMENT_ID)
+    ).resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
@@ -62,6 +75,8 @@ def run_dataset_cli(dataset_name: str) -> int:
                         overwrite=args.overwrite,
                         backbone_id=args.backbone,
                         compute_intransigence_enabled=not args.skip_intransigence,
+                        experiment_id=EXPERIMENT_ID,
+                        resume=not args.overwrite,
                     )
                     print(path)
         return 0

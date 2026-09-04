@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from cil_experiments.aggregate_results import aggregate_results
+from cil_experiments.experiment_config import experiment_result_root
 from cil_experiments.flops import PhaseFlopProfiler
 from cil_experiments.intransigence import (
     compute_intransigence,
@@ -17,7 +18,7 @@ from cil_experiments.intransigence import (
 )
 from cil_experiments.metrics import compute_cil_metrics
 from cil_experiments.models import SpikeImageAdapter, build_backbone
-from cil_experiments.output import AtomicRunArtifacts
+from cil_experiments.output import AtomicRunArtifacts, completed_summary_path
 from cil_experiments.registry import DATASETS, DEFAULT_BACKBONES
 from cil_experiments.replay_storage import PackedBinaryExample
 from cil_experiments.runner import _train_experience
@@ -55,12 +56,10 @@ def _summary(final_accuracy: float, intransigence: list[float]) -> dict:
             "median_incremental_task_s": 0.6,
         },
         "training_operations": {
-            "estimated_cumulative_dense_flops": 30,
             "task_summed_terminal_flops_per_sample": 10.0,
             "overall_learning_flops": 30,
             "core_training_flops": 20,
             "learning_auxiliary_flops": 10,
-            "hyperparameter_search_flops": 0,
             "single_sample_forward_flops": 4,
             "auxiliary_nonflop_ops": {
                 "explicit_nonflop_operator_calls": {},
@@ -88,6 +87,60 @@ def _summary(final_accuracy: float, intransigence: list[float]) -> dict:
 
 
 class ResNetJointContractTests(unittest.TestCase):
+    def test_experiment_root_and_completed_run_detection(self):
+        with tempfile.TemporaryDirectory() as name:
+            project_root = Path(name)
+            result_root = experiment_result_root(project_root, 7)
+            self.assertEqual(result_root, project_root / "result-exp7")
+            config = {
+                "experiment_id": 7,
+                "backbone": {"backbone_id": DEFAULT_BACKBONES["er_ace"]},
+                "schedule": (1, 2),
+            }
+            with AtomicRunArtifacts(
+                result_root,
+                "uwave",
+                "er_ace",
+                1,
+                62,
+                config,
+                experiment_id=7,
+            ) as artifacts:
+                artifacts.commit(
+                    _summary(0.8, [0.0, 0.1]),
+                    {
+                        "dataset": "uwave",
+                        "method": "er_ace",
+                        "backbone_id": DEFAULT_BACKBONES["er_ace"],
+                        "order_id": 1,
+                        "seed": 62,
+                        "experiment_id": 7,
+                    },
+                )
+                expected = artifacts.summary_path
+            self.assertEqual(
+                completed_summary_path(
+                    result_root,
+                    "uwave",
+                    "er_ace",
+                    1,
+                    62,
+                    7,
+                    expected_config=config,
+                ),
+                expected,
+            )
+            with self.assertRaisesRegex(ValueError, "config differs"):
+                completed_summary_path(
+                    result_root,
+                    "uwave",
+                    "er_ace",
+                    1,
+                    62,
+                    7,
+                    expected_config={"experiment_id": 7, "changed": True},
+                )
+
     def test_resnet18_forward_backward_and_strict_flops(self):
         model = build_backbone("resnet18_cifar", (3, 32, 32))
         sample = torch.randn(2, 3, 32, 32)
@@ -163,8 +216,10 @@ class ResNetJointContractTests(unittest.TestCase):
                     paired_method="er_ace",
                     order_id=1,
                     seed=62,
+                    experiment_id=7,
                 )
             joint_config = {
+                "experiment_id": 7,
                 "backbone": {"backbone_id": "resnet18_cifar"},
                 "protocol": {"input_view_id": "view"},
                 "selected_task_groups": [[0, 1], [2, 3]],
@@ -177,7 +232,7 @@ class ResNetJointContractTests(unittest.TestCase):
                 1,
                 62,
                 joint_config,
-                timestamp="20260902T000000+0800",
+                experiment_id=7,
             ) as artifacts:
                 artifacts.commit(
                     _summary(0.9, [0.0, 0.0]),
@@ -187,6 +242,7 @@ class ResNetJointContractTests(unittest.TestCase):
                         "paired_method": "er_ace",
                         "order_id": 1,
                         "seed": 62,
+                        "experiment_id": 7,
                         "tasks": 2,
                         "joint_current_task_accuracy_curve": [0.8, 0.9],
                     },
@@ -197,9 +253,11 @@ class ResNetJointContractTests(unittest.TestCase):
                 "method": "er_ace",
                 "order_id": 1,
                 "seed": 62,
+                "experiment_id": 7,
                 "tasks": 2,
             }
             cil_config = {
+                "experiment_id": 7,
                 "backbone": {"backbone_id": "different_registered_backbone"},
                 "protocol": {"input_view_id": "view"},
                 "selected_task_groups": [[0, 1], [2, 3]],
@@ -376,9 +434,9 @@ class ResNetJointContractTests(unittest.TestCase):
             )
         )
         expected_totals = {
-            "spike": (160, 40),
-            "texture": (48, 12),
-            "uwave": (179, 45),
+            "spike": (1601, 399),
+            "texture": (481, 119),
+            "uwave": (1790, 449),
         }
         for dataset, (train_total, test_total) in expected_totals.items():
             record = manifest["datasets"][dataset]
@@ -395,6 +453,7 @@ class ResNetJointContractTests(unittest.TestCase):
                     summary = _summary(0.8 + 0.01 * (seed - 62), [0.0, 0.1])
                     summary["seed"] = seed
                     config = {
+                        "experiment_id": 7,
                         "backbone": {"backbone_id": DEFAULT_BACKBONES["er_ace"]}
                     }
                     with AtomicRunArtifacts(
@@ -404,7 +463,7 @@ class ResNetJointContractTests(unittest.TestCase):
                         order_id,
                         seed,
                         config,
-                        timestamp=f"20260902T000{order_id}{seed}+0800",
+                        experiment_id=7,
                     ) as artifacts:
                         matrix = {
                             "dataset": "uwave",
@@ -412,6 +471,7 @@ class ResNetJointContractTests(unittest.TestCase):
                             "backbone_id": DEFAULT_BACKBONES["er_ace"],
                             "order_id": order_id,
                             "seed": seed,
+                            "experiment_id": 7,
                         }
                         artifacts.commit(summary, matrix)
             result = aggregate_results(
@@ -420,7 +480,9 @@ class ResNetJointContractTests(unittest.TestCase):
                 methods=("er_ace",),
                 order_ids=(1, 2),
                 seeds=(62, 63),
+                experiment_id=7,
             )
+            self.assertEqual(result["experiment_id"], 7)
             self.assertEqual(len(result["groups"]), 1)
             self.assertEqual(result["groups"][0]["n"], 4)
             self.assertEqual(len(result["groups"][0]["intransigence_by_stage"]), 2)
@@ -431,34 +493,22 @@ class ResNetJointContractTests(unittest.TestCase):
                     methods=("er_ace",),
                     order_ids=(1, 2),
                     seeds=(62, 63, 64),
+                    experiment_id=7,
                 )
-            with AtomicRunArtifacts(
-                root,
-                "uwave",
-                "er_ace",
-                1,
-                62,
-                {"backbone": {"backbone_id": DEFAULT_BACKBONES["er_ace"]}},
-                timestamp="20260902T999999+0800",
-            ) as artifacts:
-                artifacts.commit(
-                    _summary(0.8, [0.0, 0.1]),
-                    {
-                        "dataset": "uwave",
-                        "method": "er_ace",
-                        "backbone_id": DEFAULT_BACKBONES["er_ace"],
-                        "order_id": 1,
-                        "seed": 62,
-                    },
-                )
-            with self.assertRaisesRegex(RuntimeError, "Duplicate"):
-                aggregate_results(
+            with self.assertRaises(FileExistsError):
+                with AtomicRunArtifacts(
                     root,
-                    datasets=("uwave",),
-                    methods=("er_ace",),
-                    order_ids=(1, 2),
-                    seeds=(62, 63),
-                )
+                    "uwave",
+                    "er_ace",
+                    1,
+                    62,
+                    {
+                        "experiment_id": 7,
+                        "backbone": {"backbone_id": DEFAULT_BACKBONES["er_ace"]},
+                    },
+                    experiment_id=7,
+                ):
+                    pass
 
 
 if __name__ == "__main__":

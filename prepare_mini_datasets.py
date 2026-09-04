@@ -50,7 +50,7 @@ def prepare_mini_datasets(
     source_root: Path,
     destination_root: Path,
     *,
-    ratio: float = 0.05,
+    ratio: float = 0.50,
     seed: int = 62,
 ) -> dict:
     if not 0.0 < ratio < 1.0:
@@ -108,11 +108,11 @@ def prepare_mini_datasets(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build stratified ~5% CIL datasets")
+    parser = argparse.ArgumentParser(description="Build stratified 50% CIL datasets")
     root = Path(__file__).resolve().parent
     parser.add_argument("--source-root", type=Path, default=root / "dataset")
     parser.add_argument("--destination-root", type=Path, default=root / "dataset_mini")
-    parser.add_argument("--ratio", type=float, default=0.05)
+    parser.add_argument("--ratio", type=float, default=0.50)
     parser.add_argument("--seed", type=int, default=62)
     args = parser.parse_args()
     manifest = prepare_mini_datasets(

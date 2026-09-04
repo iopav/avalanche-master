@@ -149,6 +149,17 @@ METHODS: dict[str, dict[str, Any]] = {
         "proj_output_dim": 1024,
         "interpolation_factor": 0.95,
         "attention_heads": 8,
+        # Optional phase-specific overrides used by source-parity/manual runs.
+        # None preserves the shared formal training parameters.
+        "init_epochs": None,
+        "inc_epochs": None,
+        "init_lr": None,
+        "inc_lr": None,
+        "init_weight_decay": None,
+        "inc_weight_decay": None,
+        "init_milestones": None,
+        "inc_milestones": None,
+        "gamma": None,
         "source": "CVPR 2025 TagFex image-network structure, losses, expansion, herding and alignment ported to Avalanche",
     },
 }

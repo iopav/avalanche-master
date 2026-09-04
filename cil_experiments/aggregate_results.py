@@ -11,6 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+from .experiment_config import EXPERIMENT_ID, experiment_result_root, validate_experiment_id
 from .intransigence import _artifact_paths
 from .metrics import validate_summary
 from .order_seed_registry import SEEDS
@@ -60,10 +61,14 @@ def aggregate_results(
     methods: tuple[str, ...],
     order_ids: tuple[int, ...],
     seeds: tuple[int, ...],
+    experiment_id: int = EXPERIMENT_ID,
 ) -> dict[str, Any]:
+    experiment_id = validate_experiment_id(experiment_id)
     records: dict[tuple[str, str, str, int, int], dict[str, Any]] = {}
     observed_dataset_methods: set[tuple[str, str]] = set()
-    for summary_path in result_root.glob("*/*/summary/*__timestamp-*__summary.json"):
+    for summary_path in result_root.glob(
+        f"*/*/summary/*__exp-{experiment_id}__summary.json"
+    ):
         matrix_path, config_path = _artifact_paths(summary_path)
         if not matrix_path.is_file() or not config_path.is_file():
             raise FileNotFoundError(f"Incomplete artifact set for {summary_path}")
@@ -82,6 +87,10 @@ def aggregate_results(
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
         config = json.loads(config_path.read_text(encoding="utf-8"))
         validate_summary(summary)
+        if matrix.get("experiment_id") != experiment_id:
+            raise ValueError(f"Experiment ID mismatch in {matrix_path}")
+        if config.get("experiment_id") != experiment_id:
+            raise ValueError(f"Experiment ID mismatch in {config_path}")
         backbone_id = config.get("backbone", {}).get("backbone_id")
         if not isinstance(backbone_id, str) or not backbone_id:
             raise ValueError(f"Missing backbone ID in {config_path}")
@@ -142,6 +151,7 @@ def aggregate_results(
         )
     return {
         "schema": "formal-cil-aggregate-v1",
+        "experiment_id": experiment_id,
         "datasets": list(datasets),
         "methods": list(methods),
         "order_ids": list(order_ids),
@@ -152,14 +162,17 @@ def aggregate_results(
 
 def _csv_text(payload: dict[str, Any]) -> str:
     stream = io.StringIO(newline="")
-    fields = ["dataset", "method", "backbone_id", "n"]
+    fields = ["experiment_id", "dataset", "method", "backbone_id", "n"]
     for metric in SCALAR_METRICS:
         fields.extend((f"{metric}_mean", f"{metric}_std"))
     fields.extend(("intransigence_mean_by_stage", "intransigence_std_by_stage"))
     writer = csv.DictWriter(stream, fieldnames=fields)
     writer.writeheader()
     for group in payload["groups"]:
-        row = {key: group[key] for key in ("dataset", "method", "backbone_id", "n")}
+        row = {
+            "experiment_id": payload["experiment_id"],
+            **{key: group[key] for key in ("dataset", "method", "backbone_id", "n")},
+        }
         for metric, aggregate in group["metrics"].items():
             row[f"{metric}_mean"] = aggregate["mean"]
             row[f"{metric}_std"] = aggregate["std"]
@@ -176,6 +189,8 @@ def _csv_text(payload: dict[str, Any]) -> str:
 def _markdown_text(payload: dict[str, Any]) -> str:
     lines = [
         "# Formal CIL aggregate",
+        "",
+        f"Experiment: `{payload['experiment_id']}`.",
         "",
         f"Orders: `{payload['order_ids']}`; seeds: `{payload['seeds']}`.",
         "",
@@ -206,22 +221,32 @@ def _markdown_text(payload: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Aggregate complete formal CIL runs")
-    parser.add_argument("--result-root", type=Path, default=Path("result"))
-    parser.add_argument("--output-prefix", type=Path, default=Path("result/formal_aggregate"))
+    parser = argparse.ArgumentParser(
+        description=(
+            "Aggregate complete formal CIL runs from the result-exp folder selected "
+            "in cil_experiments/experiment_config.py"
+        )
+    )
+    project_root = Path(__file__).resolve().parents[1]
+    parser.add_argument("--result-root", type=Path)
+    parser.add_argument("--output-prefix", type=Path)
     parser.add_argument("--datasets", nargs="+", choices=sorted(DATASETS), default=list(DATASETS))
     parser.add_argument("--methods", nargs="+", choices=list(FORMAL_METHODS), default=list(FORMAL_METHODS))
     parser.add_argument("--order-ids", nargs="+", type=int, default=list(ORDER_IDS))
     parser.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     args = parser.parse_args()
+    result_root = (
+        args.result_root or experiment_result_root(project_root, EXPERIMENT_ID)
+    ).resolve()
     payload = aggregate_results(
-        args.result_root.resolve(),
+        result_root,
         datasets=tuple(args.datasets),
         methods=tuple(args.methods),
         order_ids=tuple(args.order_ids),
         seeds=tuple(args.seeds),
+        experiment_id=EXPERIMENT_ID,
     )
-    prefix = args.output_prefix.resolve()
+    prefix = (args.output_prefix or result_root / "formal_aggregate").resolve()
     _atomic_text(prefix.with_suffix(".json"), json_text(payload))
     _atomic_text(prefix.with_suffix(".csv"), _csv_text(payload))
     _atomic_text(prefix.with_suffix(".md"), _markdown_text(payload))

@@ -43,7 +43,6 @@ FLOP_KEYS = {
     "overall_learning_flops",
     "core_training_flops",
     "learning_auxiliary_flops",
-    "hyperparameter_search_flops",
     "single_sample_forward_flops",
 }
 # 8.27core = before_forward ~ after_update 之间的flopsforward
@@ -107,7 +106,6 @@ def validate_summary(
     }:
         raise AssertionError("training_runtime keys differ from metrics1.docx")
     training_operation_keys = {
-        "estimated_cumulative_dense_flops",
         "task_summed_terminal_flops_per_sample",
         *FLOP_KEYS,
         "auxiliary_nonflop_ops",
@@ -119,10 +117,7 @@ def validate_summary(
         if isinstance(flops[key], bool) or not isinstance(flops[key], int) or flops[key] < 0:
             raise AssertionError(f"flops.{key} must be a non-negative integer")
     formal_training_flops = flops["core_training_flops"] + flops["learning_auxiliary_flops"]
-    if summary["training_operations"]["estimated_cumulative_dense_flops"] != formal_training_flops:
-        raise AssertionError("formal training FLOPs differ from core plus learning auxiliary FLOPs")
-    expected_overall = formal_training_flops + flops["hyperparameter_search_flops"]
-    if flops["overall_learning_flops"] != expected_overall:
+    if flops["overall_learning_flops"] != formal_training_flops:
         raise AssertionError("overall learning FLOPs identity failed")
     nonflop = flops["auxiliary_nonflop_ops"]
     if set(nonflop) != {

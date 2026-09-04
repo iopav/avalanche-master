@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.optim import SGD
+from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
@@ -353,6 +353,8 @@ class _StoredExamples(Dataset):
 
 @dataclass(frozen=True)
 class TagFexHyperParameters:
+    optimizer: str = "SGD"
+    foreach: bool = False
     init_epochs: int = 1
     inc_epochs: int = 1
     train_mb_size: int = 64
@@ -415,7 +417,12 @@ class AvalancheTagFex(SupervisedTemplate):
                 "merge_attn": True,
             }
             model = TagFexNet(backbone_configs, network_configs, device)
-        optimizer = SGD(model.parameters(), lr=hparams.init_lr, foreach=False)
+        optimizer = self._build_optimizer(
+            model.parameters(),
+            hparams,
+            lr=hparams.init_lr,
+            weight_decay=hparams.init_weight_decay,
+        )
         super().__init__(
             model=model,
             optimizer=optimizer,
@@ -454,6 +461,21 @@ class AvalancheTagFex(SupervisedTemplate):
         self._replay_unpack_calls = 0
         self._replay_unpacked_elements = 0
         self._replay_label_decode_calls = 0
+
+    @staticmethod
+    def _build_optimizer(parameters, hparams, *, lr: float, weight_decay: float):
+        common = {
+            "lr": float(lr),
+            "weight_decay": float(weight_decay),
+            "foreach": bool(hparams.foreach),
+        }
+        if hparams.optimizer == "SGD":
+            return SGD(parameters, momentum=float(hparams.momentum), **common)
+        if hparams.optimizer == "Adam":
+            return Adam(parameters, **common)
+        raise ValueError(
+            f"Unsupported TagFex optimizer: {hparams.optimizer}; expected SGD or Adam"
+        )
 
     def _note_replay_materialize(self, elements: int, packed: bool) -> None:
         self._replay_label_decode_calls += 1
@@ -509,12 +531,11 @@ class AvalancheTagFex(SupervisedTemplate):
             self.hparams.init_milestones if first else self.hparams.inc_milestones
         )
         # The original code rebuilds both objects for every task.
-        self.optimizer = SGD(
+        self.optimizer = self._build_optimizer(
             self.model.parameters(),
+            self.hparams,
             lr=lr,
-            momentum=self.hparams.momentum,
             weight_decay=weight_decay,
-            foreach=False,
         )
         self.scheduler = MultiStepLR(
             self.optimizer, milestones=list(milestones), gamma=self.hparams.gamma

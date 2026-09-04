@@ -31,6 +31,7 @@ def build_internal_validation_benchmark(
     *,
     validation_fraction: float = 0.2,
     order_id: int = 1,
+    allow_variable_samples: bool = False,
 ):
     """Split training data per class and expose the held-out part as a validation stream."""
     from avalanche.benchmarks.scenarios.deprecated.generators import nc_benchmark
@@ -38,7 +39,9 @@ def build_internal_validation_benchmark(
     if not 0.0 < validation_fraction < 1.0:
         raise ValueError("validation_fraction must be strictly between 0 and 1")
     spec = DATASETS[dataset_name]
-    validate_source_files(dataset_root, spec)
+    validate_source_files(
+        dataset_root, spec, allow_variable_samples=allow_variable_samples
+    )
     task_groups = get_task_groups(dataset_name, order_id)
     class_split = get_task_split(dataset_name, order_id)
     raw_order = project_order(dataset_name, order_id)

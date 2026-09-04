@@ -22,9 +22,12 @@ VALIDATION_SEED = 62
 VALIDATION_FRACTION = 0.2
 EPOCHS = 3
 DEVICE = "cuda"
+DATA_MODE = "mini"
+BACKBONE_ID = "resnet18_cifar"
+OPTIMIZER = "Adam"
 
 # FeCAM 只在第一个 Experience 训练共享骨干，因此学习率主要影响冻结前的特征质量。
-LEARNING_RATES = (0.003, 0.01, 0.03)
+LEARNING_RATES = (0.01,)
 
 # tukey 固定为 False：当前共享骨干输出可能为负，分数次幂会产生 NaN。
 # shrinkage=False 时 shrink1/shrink2 不参与计算，所以统一写为 0，避免重复候选。
@@ -42,7 +45,13 @@ COVARIANCE_CONFIGS = (
 
 def _candidate_grid() -> list[dict[str, object]]:
     return [
-        {"learning_rate": learning_rate, "tukey": False, **covariance}
+        {
+            "optimizer": OPTIMIZER,
+            "learning_rate": learning_rate,
+            "weight_decay": 0.0,
+            "tukey": False,
+            **covariance,
+        }
         for learning_rate, covariance in product(LEARNING_RATES, COVARIANCE_CONFIGS)
     ]
 
@@ -58,15 +67,22 @@ def _resolve_device() -> torch.device:
     return device
 
 
-def _run_candidate(candidate: dict[str, object], device: torch.device) -> dict[str, object]:
+def _run_candidate(
+    candidate: dict[str, object],
+    device: torch.device,
+    dataset_root,
+    backbone_id: str,
+    use_mini: bool,
+) -> dict[str, object]:
     # 每个候选都重置随机状态并重建 benchmark/model，不能继承前一候选的权重或统计量。
     _set_determinism(VALIDATION_SEED)
     benchmark, _ = build_internal_validation_benchmark(
-        PROJECT_ROOT / "dataset",
+        dataset_root,
         "spike",
         VALIDATION_SEED,
         validation_fraction=VALIDATION_FRACTION,
         order_id=1,
+        allow_variable_samples=use_mini,
     )
     parameters = get_final_hyperparameters(
         "spike", "fecam", {**candidate, "epochs_per_experience": EPOCHS}
@@ -79,6 +95,7 @@ def _run_candidate(candidate: dict[str, object], device: torch.device) -> dict[s
         "spike",
         enable_flop_accounting=False,
         resolved_parameters=parameters,
+        backbone_id=backbone_id,
     )
     task_count = len(benchmark.train_stream)
     matrix = np.full((task_count, task_count), np.nan, dtype=np.float64)
@@ -114,6 +131,10 @@ def _run_candidate(candidate: dict[str, object], device: torch.device) -> dict[s
 
 
 def main() -> None:
+    if DATA_MODE not in {"mini", "full"}:
+        raise ValueError("DATA_MODE must be 'mini' or 'full'")
+    use_mini = DATA_MODE == "mini"
+    dataset_root = PROJECT_ROOT / ("dataset_mini" if use_mini else "dataset")
     device = _resolve_device()
     candidates = _candidate_grid()
     print(
@@ -124,7 +145,9 @@ def main() -> None:
     )
     results: list[dict[str, object]] = []
     for candidate_id, candidate in enumerate(candidates, start=1):
-        result = _run_candidate(candidate, device)
+        result = _run_candidate(
+            candidate, device, dataset_root, BACKBONE_ID, use_mini
+        )
         result["candidate_id"] = candidate_id
         results.append(result)
         print(
@@ -150,11 +173,6 @@ def main() -> None:
         f"验证集平均增量准确率: {best['average_incremental_accuracy'] * 100:.2f}%"
     )
     print(_format_accuracy_matrix(best["matrix"]))
-    if best["parameters"]["learning_rate"] in {
-        min(LEARNING_RATES),
-        max(LEARNING_RATES),
-    }:
-        print("警告：最佳 learning_rate 位于当前网格边界，正式锁定前应向该方向扩展搜索。")
 
 
 if __name__ == "__main__":

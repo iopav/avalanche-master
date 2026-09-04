@@ -65,7 +65,7 @@ def _validate_identity(
     joint_matrix: dict[str, Any],
     joint_config: dict[str, Any],
 ) -> None:
-    identity_keys = ("dataset", "order_id", "seed")
+    identity_keys = ("dataset", "order_id", "seed", "experiment_id")
     mismatches = {
         key: (cil_matrix.get(key), joint_matrix.get(key))
         for key in identity_keys
@@ -143,11 +143,12 @@ def find_joint_summary(
     paired_method: str,
     order_id: int,
     seed: int,
+    experiment_id: int,
 ) -> Path:
     joint_method = f"joint_{paired_method}"
     pattern = (
         f"{dataset}__{joint_method}__order-{order_id:02d}__seed-{seed:03d}"
-        "__timestamp-*__summary.json"
+        f"__exp-{experiment_id}__summary.json"
     )
     matches = sorted((result_root / dataset / joint_method / "summary").glob(pattern))
     if len(matches) != 1:

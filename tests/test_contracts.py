@@ -325,11 +325,10 @@ class ProtocolContractTests(unittest.TestCase):
                 }
             ],
         )
-        summary = summarize_learning_flops([result], 100, 60)
+        summary = summarize_learning_flops([result], 60)
         self.assertEqual(summary["core_training_flops"], 194)
         self.assertEqual(summary["learning_auxiliary_flops"], 10)
-        self.assertEqual(summary["hyperparameter_search_flops"], 100)
-        self.assertEqual(summary["overall_learning_flops"], 304)
+        self.assertEqual(summary["overall_learning_flops"], 204)
         self.assertEqual(summary["single_sample_forward_flops"], 60)
         result.zero_flop_operations = {"aten.reshape": 4, "aten.copy_": 2}
         nonflop = summarize_auxiliary_nonflop_ops([result])
@@ -523,12 +522,12 @@ class ProtocolContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="cil-atomic-test-", dir=workspace_temp) as name:
             root = Path(name) / "result"
             config = {"x": 1}
-            timestamp = "20260821T120000+0800"
+            experiment_id = 7
             matrix_payload = {"accuracy_matrix_lower_triangular": [[0.5, None], [0.4, 0.6]]}
-            with AtomicRunArtifacts(root, "d", "m", 1, 62, config, timestamp=timestamp) as artifacts:
+            with AtomicRunArtifacts(root, "d", "m", 1, 62, config, experiment_id=experiment_id) as artifacts:
                 artifacts.logger.info("complete")
                 artifacts.commit({"ok": True}, matrix_payload)
-            stem = f"d__m__order-01__seed-062__timestamp-{timestamp}"
+            stem = f"d__m__order-01__seed-062__exp-{experiment_id}"
             config_path = root / "d" / "m" / f"{stem}__config.json"
             self.assertTrue(config_path.is_file())
             self.assertTrue((root / "d" / "m" / "log" / f"{stem}.log").is_file())
@@ -537,10 +536,10 @@ class ProtocolContractTests(unittest.TestCase):
             self.assertEqual(json.loads(summary.read_text(encoding="utf-8")), {"ok": True})
             self.assertEqual(json.loads(matrix.read_text(encoding="utf-8")), matrix_payload)
             with self.assertRaises(FileExistsError):
-                with AtomicRunArtifacts(root, "d", "m", 1, 62, config, timestamp=timestamp):
+                with AtomicRunArtifacts(root, "d", "m", 1, 62, config, experiment_id=experiment_id):
                     pass
             with AtomicRunArtifacts(
-                root, "d", "m", 1, 62, {"x": 2}, overwrite=True, timestamp=timestamp
+                root, "d", "m", 1, 62, {"x": 2}, overwrite=True, experiment_id=experiment_id
             ) as artifacts:
                 artifacts.logger.info("replacement")
                 artifacts.commit({"ok": "replacement"}, matrix_payload)
@@ -550,7 +549,7 @@ class ProtocolContractTests(unittest.TestCase):
 
             failed_root = Path(name) / "failed"
             with self.assertRaisesRegex(RuntimeError, "intentional"):
-                with AtomicRunArtifacts(failed_root, "d", "m", 1, 62, config, timestamp=timestamp):
+                with AtomicRunArtifacts(failed_root, "d", "m", 1, 62, config, experiment_id=experiment_id):
                     raise RuntimeError("intentional")
             self.assertFalse(any(failed_root.rglob("*")) if failed_root.exists() else False)
 

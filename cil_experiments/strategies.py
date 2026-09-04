@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import torch
 from torch import nn
-from torch.optim import SGD
+from torch.optim import Adam, SGD
 from torch.utils.data import DataLoader
 
 from .models import BackboneClassifier, build_feature_extractor
@@ -529,16 +529,21 @@ def _model_input_shape(dataset_name: str, supplied: tuple[int, ...] | None) -> t
 
 
 def _optimizer(parameters, training_parameters: dict[str, Any]):
-    if training_parameters["optimizer"] != "SGD":
-        raise ValueError(f"Unsupported optimizer: {training_parameters['optimizer']}")
-    return SGD(
-        parameters,
-        lr=training_parameters["learning_rate"],
-        momentum=training_parameters["momentum"],
-        # momentum = 0.9,
-        weight_decay=training_parameters["weight_decay"],
-        foreach=training_parameters["foreach"],
-    )
+    optimizer_name = str(training_parameters["optimizer"])
+    common = {
+        "lr": float(training_parameters["learning_rate"]),
+        "weight_decay": float(training_parameters["weight_decay"]),
+        "foreach": bool(training_parameters["foreach"]),
+    }
+    if optimizer_name == "SGD":
+        return SGD(
+            parameters,
+            momentum=float(training_parameters["momentum"]),
+            **common,
+        )
+    if optimizer_name == "Adam":
+        return Adam(parameters, **common)
+    raise ValueError(f"Unsupported optimizer: {optimizer_name}; expected SGD or Adam")
 
 
 def build_si_tuning_strategy(
@@ -972,17 +977,40 @@ def build_strategy(
             TagFexHyperParameters,
         )
 
+        def phase_value(name: str, fallback):
+            value = method_parameters[name]
+            return fallback if value is None else value
+
         hparams = TagFexHyperParameters(
-            init_epochs=epochs,
-            inc_epochs=epochs,
+            optimizer=str(training_parameters["optimizer"]),
+            foreach=bool(training_parameters["foreach"]),
+            init_epochs=int(phase_value("init_epochs", epochs)),
+            inc_epochs=int(phase_value("inc_epochs", epochs)),
             train_mb_size=int(training_parameters["train_mb_size"]),
             eval_mb_size=int(training_parameters["eval_mb_size"]),
             memory_size=int(method_parameters["memory_size"]),
-            init_lr=float(training_parameters["learning_rate"]),
-            inc_lr=float(training_parameters["learning_rate"]),
+            init_lr=float(
+                phase_value("init_lr", training_parameters["learning_rate"])
+            ),
+            inc_lr=float(
+                phase_value("inc_lr", training_parameters["learning_rate"])
+            ),
             momentum=float(training_parameters["momentum"]),
-            init_weight_decay=float(training_parameters["weight_decay"]),
-            inc_weight_decay=float(training_parameters["weight_decay"]),
+            init_weight_decay=float(
+                phase_value("init_weight_decay", training_parameters["weight_decay"])
+            ),
+            inc_weight_decay=float(
+                phase_value("inc_weight_decay", training_parameters["weight_decay"])
+            ),
+            init_milestones=tuple(
+                int(value)
+                for value in phase_value("init_milestones", (60, 120, 170))
+            ),
+            inc_milestones=tuple(
+                int(value)
+                for value in phase_value("inc_milestones", (80, 120, 150))
+            ),
+            gamma=float(phase_value("gamma", 0.1)),
             contrast_factor=float(method_parameters["contrast_factor"]),
             contrast_kd_factor=float(method_parameters["contrast_kd_factor"]),
             aux_factor=float(method_parameters["aux_factor"]),

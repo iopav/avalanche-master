@@ -527,10 +527,9 @@ class ExperienceFlopResult:
 
 def summarize_learning_flops(
     experience_results: list[ExperienceFlopResult],
-    hyperparameter_search_flops: int,
     single_sample_forward_flops: int,
 ) -> dict[str, int]:
-    if hyperparameter_search_flops < 0 or single_sample_forward_flops < 0:
+    if single_sample_forward_flops < 0:
         raise ValueError("FLOP summary inputs must be non-negative")
     phase_totals: Counter[str] = Counter()
     recorded_training_total = 0
@@ -548,10 +547,9 @@ def summarize_learning_flops(
             f"{core} + {auxiliary} != {recorded_training_total}"
         )
     return {
-        "overall_learning_flops": core + auxiliary + int(hyperparameter_search_flops),
+        "overall_learning_flops": core + auxiliary,
         "core_training_flops": core,
         "learning_auxiliary_flops": auxiliary,
-        "hyperparameter_search_flops": int(hyperparameter_search_flops),
         "single_sample_forward_flops": int(single_sample_forward_flops),
     }
 

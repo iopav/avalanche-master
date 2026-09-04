@@ -61,15 +61,20 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
+            "weight_decay": 5e-4, "foreach": False, "train_mb_size": 8,
+            "eval_mb_size": 8, "num_workers": 0, "epochs_per_experience": 40,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
-            "trans_cls_factor": 0.005, "transfer_factor": 1.0,
+            "trans_cls_factor": 1.0, "transfer_factor": 1.0,
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
+            "init_epochs": 60, "inc_epochs": 40,
+            "init_lr": 0.1, "inc_lr": 0.1,
+            "init_weight_decay": 5e-4, "inc_weight_decay": 2e-4,
+            "init_milestones": (60, 120, 170),
+            "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },
     },
     "texture": {
@@ -105,15 +110,20 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
+            "weight_decay": 5e-4, "foreach": False, "train_mb_size": 8,
+            "eval_mb_size": 8, "num_workers": 0, "epochs_per_experience": 40,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
             "trans_cls_factor": 0.005, "transfer_factor": 1.0,
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
+            "init_epochs": 60, "inc_epochs": 40,
+            "init_lr": 0.1, "inc_lr": 0.1,
+            "init_weight_decay": 5e-4, "inc_weight_decay": 2e-4,
+            "init_milestones": (60, 120, 170),
+            "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },
     },
     "uwave": {
@@ -149,15 +159,20 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "shrink2": 0.5, "covnorm": True,
         },
         "tagfex": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
+            "weight_decay": 5e-4, "foreach": False, "train_mb_size": 8,
+            "eval_mb_size": 8, "num_workers": 0, "epochs_per_experience": 40,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
             "trans_cls_factor": 0.005, "transfer_factor": 1.0,
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
+            "init_epochs": 60, "inc_epochs": 40,
+            "init_lr": 0.1, "inc_lr": 0.1,
+            "init_weight_decay": 5e-4, "inc_weight_decay": 2e-4,
+            "init_milestones": (60, 120, 170),
+            "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },
     },
 }
@@ -177,7 +192,9 @@ METHOD_KEYS = {
         "memory_size", "contrast_factor", "contrast_kd_factor", "aux_factor",
         "trans_cls_factor", "transfer_factor", "infonce_temp", "infonce_kd_temp",
         "kd_temp", "proj_hidden_dim", "proj_output_dim", "interpolation_factor",
-        "attention_heads",
+        "attention_heads", "init_epochs", "inc_epochs", "init_lr", "inc_lr",
+        "init_weight_decay", "inc_weight_decay", "init_milestones",
+        "inc_milestones", "gamma",
     },
 }
 
@@ -196,8 +213,8 @@ def validate_final_hyperparameter_entry(
             f"Final hyperparameter keys differ for {dataset}/{method}: "
             f"missing={sorted(expected - actual)} unexpected={sorted(actual - expected)}"
         )
-    if parameters["optimizer"] != "SGD":
-        raise ValueError("Only SGD is implemented by the shared formal strategy builder")
+    if parameters["optimizer"] not in {"SGD", "Adam"}:
+        raise ValueError("The shared strategy builder supports only SGD or Adam")
     for key in ("learning_rate", "train_mb_size", "eval_mb_size", "epochs_per_experience"):
         if float(parameters[key]) <= 0:
             raise ValueError(f"{dataset}/{method} requires {key} > 0")
@@ -237,6 +254,18 @@ def validate_final_hyperparameter_entry(
         heads = int(parameters["attention_heads"])
         if heads <= 0 or 64 % heads:
             raise ValueError("TagFex attention_heads must be a positive divisor of 64")
+        for key in ("init_epochs", "inc_epochs", "init_lr", "inc_lr", "gamma"):
+            if float(parameters[key]) <= 0:
+                raise ValueError(f"{dataset}/{method} requires {key} > 0")
+        for key in ("init_weight_decay", "inc_weight_decay"):
+            if float(parameters[key]) < 0:
+                raise ValueError(f"{dataset}/{method} requires {key} >= 0")
+        for key in ("init_milestones", "inc_milestones"):
+            milestones = tuple(int(value) for value in parameters[key])
+            if not milestones or any(value <= 0 for value in milestones):
+                raise ValueError(f"{dataset}/{method} requires positive {key}")
+            if tuple(sorted(milestones)) != milestones or len(set(milestones)) != len(milestones):
+                raise ValueError(f"{dataset}/{method} requires strictly increasing {key}")
 
 
 def get_final_hyperparameters(

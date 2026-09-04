@@ -2,7 +2,16 @@
 
 This directory contains one editable entry point for every formal dataset-method pair, plus manual-only SI, LwF, Spike EWC+Cosine and Spike MAS candidate scripts. Each script uses the same image adapter, class order, deterministic seed, selectable registered ResNet18, Avalanche strategy, minibatch protocol, no-augmentation protocol and post-experience test evaluation as the formal runner. Candidate methods cannot be selected by the formal entrypoints.
 
-Manual runs use the deterministic class-stratified `dataset_mini/` subset by default. It contains approximately 5% of each train/test class and preserves the exact raw/image representations used by the full datasets. Rebuild it with `python prepare_mini_datasets.py`; pass `use_mini=False` to `run_manual` only when a full-data confirmation is required. The selected backbone can be `resnet18_cifar_small`, `resnet18_cifar`, or `resnet18_cifar_large` through the `backbone_id` argument.
+Manual scripts use `resnet18_cifar` and the deterministic class-stratified `dataset_mini/` subset by default. TagFex uses SGD with momentum `0.9`; every other method currently uses Adam. The current manual starting learning rate is `0.01` and weight decay is zero in all scripts. Each script writes these choices directly in the Python file. The mini dataset contains approximately 50% of each train/test class and preserves the same raw/image representations used by the full datasets. Rebuild it with `python prepare_mini_datasets.py`.
+
+Edit these constants near the bottom of any individual script before running it:
+
+```python
+DATA_MODE = "mini"  # "mini" or "full"
+BACKBONE_ID = "resnet18_cifar"  # small, standard, or large
+```
+
+`DATA_MODE` accepts `mini` or `full`; `BACKBONE_ID` accepts `resnet18_cifar_small`, `resnet18_cifar`, or `resnet18_cifar_large`.
 
 Edit only the `PARAMETERS`, `ORDER_ID`, `SEED`, `EPOCHS` and `DEVICE` constants near the top of a script, then run it from the `py310` environment. Every script now explicitly uses `DEVICE = "cuda"`; CUDA unavailability is an error and never silently falls back to CPU. At startup the runner prints the resolved CUDA device name and verifies that every model parameter is on the requested device. Example:
 

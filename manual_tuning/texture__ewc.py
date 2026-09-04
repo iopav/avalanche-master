@@ -1,9 +1,11 @@
-from common import run_manual
+from common import run_manual_entry
 
 PARAMETERS = {
-    # SGD 学习率。增大可加快学习，但可能压过 EWC 正则保护；减小更稳，
+    "optimizer": "Adam",
+    # Adam 学习率。增大可加快学习，但可能压过 EWC 正则保护；减小更稳，
     # 但可能使新任务欠拟合。
     "learning_rate": 0.01,
+    "weight_decay": 0.0,
     # Fisher 加权旧参数惩罚强度。增大可增强稳定性但限制新任务学习；
     # 减小可提高可塑性，但通常会增加遗忘。
     "ewc_lambda": 0.4,
@@ -14,7 +16,9 @@ PARAMETERS = {
 
 # 比较候选参数时保持 ORDER_ID 和 SEED 不变。增大 EPOCHS 可能改善当前任务拟合，
 # 但也可能增加遗忘。显式指定 CUDA 可防止静默回退到 CPU。
+DATA_MODE = "mini"
+BACKBONE_ID = "resnet18_cifar"
 ORDER_ID, SEED, EPOCHS, DEVICE = 6, 62, 20, "cuda"
 
 if __name__ == "__main__":
-    run_manual(dataset="texture", method="ewc", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE)
+    run_manual_entry(dataset="texture", method="ewc", parameters=PARAMETERS, order_id=ORDER_ID, seed=SEED, epochs=EPOCHS, device=DEVICE, data_mode=DATA_MODE, backbone_id=BACKBONE_ID)
