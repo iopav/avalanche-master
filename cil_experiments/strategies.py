@@ -290,7 +290,7 @@ class InstrumentedICaRLPluginMixin:
 
     def _materialize_packed(self) -> list[torch.Tensor]:
         if len(self.packed_memory) != len(self.persistent_labels):
-            raise AssertionError("Packed ICaRL samples and labels have different group counts")
+            raise RuntimeError("Packed ICaRL samples and labels have different group counts")
         materialized = []
         decoded_labels = []
         unpacked_elements = 0
@@ -335,7 +335,7 @@ class InstrumentedICaRLPluginMixin:
             for idx, tensor in enumerate(self.x_memory):
                 self.x_memory[idx] = tensor.detach().cpu().to(torch.float32).contiguous()
         if len(self.x_memory) != len(self.y_memory):
-            raise AssertionError("ICaRL replay sample and label groups are inconsistent")
+            raise RuntimeError("ICaRL replay sample and label groups are inconsistent")
         packed = []
         persistent_labels = []
         packed_elements = 0
@@ -391,7 +391,7 @@ class InstrumentedICaRLPluginMixin:
         self._pack_current_memory()
         strategy.model.train()
         if stored > self.memory_size:
-            raise AssertionError(f"ICaRL stored {stored} samples above cap {self.memory_size}")
+            raise RuntimeError(f"ICaRL stored {stored} samples above cap {self.memory_size}")
 
     def construct_exemplar_set(self, strategy):
         from avalanche.benchmarks.utils import _taskaware_classification_subset
@@ -823,6 +823,10 @@ def build_strategy(
 
     if method not in METHODS:
         raise ValueError(f"Unknown method {method}")
+    if method == "joint":
+        raise ValueError(
+            "Joint is tested from a saved search checkpoint and has no trainable strategy"
+        )
     resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[method]
     resolved_input_shape = _model_input_shape(dataset_name, model_input_shape)
     training_parameters = dict(TRAINING_DEFAULTS)
@@ -1045,4 +1049,4 @@ def build_strategy(
         return StrategyBundle(
             method, strategy, phase_plugin, strategy, backbone_id=resolved_backbone_id
         )
-    raise AssertionError(method)
+    raise ValueError(f"Unsupported registered method: {method}")

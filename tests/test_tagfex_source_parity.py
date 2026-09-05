@@ -108,20 +108,14 @@ class TagFexSourceParityTests(unittest.TestCase):
         self.assertEqual(len(source.ta_net.stage_1), 5)
         self.assertEqual(len(source.ta_net.stage_2), 5)
         self.assertEqual(len(source.ta_net.stage_3), 5)
-        self.assertEqual(
-            {spec.feature_dim for spec in BACKBONES.values()}, {256, 512, 768}
-        )
+        self.assertEqual(set(BACKBONES), {"resnet18_cifar", "temporal"})
 
         source.update_network(2)
         self.assertEqual(source.classifier.in_features, 64)
         sample = torch.randn(2, 3, 32, 32)
         self.assertEqual(tuple(source.ta_net(sample)["fmaps"][-1].shape), (2, 64, 8, 8))
 
-        for backbone_id, expected_dim in (
-            ("resnet18_cifar_small", 256),
-            ("resnet18_cifar", 512),
-            ("resnet18_cifar_large", 768),
-        ):
+        for backbone_id, expected_dim in (("resnet18_cifar", 512),):
             port = ImageTagFexNet(
                 backbone_id,
                 "uwave",

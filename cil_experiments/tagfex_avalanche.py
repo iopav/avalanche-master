@@ -235,7 +235,6 @@ class ImageTagFexNet(nn.Module):
                 embedding=self.projector(ta_feature),
             )
             if self.trans_classifier is not None:
-                assert self.ts_attn is not None
                 ts_feature = ts_outputs[-1]["fmaps"][-1].flatten(2).permute(0, 2, 1)
                 ta_sequence = ta_fmap.flatten(2).permute(0, 2, 1)
                 merged = self.ts_attn(ta_sequence.detach(), ts_feature).mean(1)
@@ -269,7 +268,6 @@ class ImageTagFexNet(nn.Module):
 
     @torch.no_grad()
     def weight_align(self, num_new_classes: int) -> None:
-        assert self.classifier is not None
         new = self.classifier.weight[-num_new_classes:].norm(dim=-1).mean()
         old = self.classifier.weight[:-num_new_classes].norm(dim=-1).mean()
         self.classifier.weight[-num_new_classes:] *= old / new.clamp_min(1e-12)
@@ -490,7 +488,6 @@ class AvalancheTagFex(SupervisedTemplate):
 
     @property
     def mb_y(self):
-        assert self.mbatch is not None
         return self.mbatch[2] if self.is_training else self.mbatch[1]
 
     def _phase_context(self, phase: str):
@@ -503,7 +500,6 @@ class AvalancheTagFex(SupervisedTemplate):
         return len(self.seen_classes) - len(self._current_classes())
 
     def _current_classes(self) -> list[int]:
-        assert self.experience is not None
         return sorted(int(v) for v in self.experience.classes_in_this_experience)
 
     def model_adaptation(self, model=None):
@@ -549,7 +545,6 @@ class AvalancheTagFex(SupervisedTemplate):
         drop_last=False,
         **kwargs,
     ):
-        assert self.experience is not None
         datasets: list[Dataset] = [self.experience.dataset.train()]
         replay = [example for values in self.memory_by_class.values() for example in values]
         if replay:
@@ -601,7 +596,6 @@ class AvalancheTagFex(SupervisedTemplate):
         aux_loss = F.cross_entropy(outputs["aux_logits"], aux_targets)
 
         predicted_feature = outputs["predicted_feature"]
-        assert self.last_ta_net is not None and self.last_projector is not None
         samples = torch.cat((self.mbatch[0], self.mbatch[1])).contiguous()
         with self._phase_context("learning_auxiliary"):
             old_ta_feature = self.last_ta_net(samples)["features"]
@@ -687,7 +681,6 @@ class AvalancheTagFex(SupervisedTemplate):
 
     @torch.no_grad()
     def _collect_current_examples(self) -> dict[int, list[tuple[torch.Tensor, int]]]:
-        assert self.experience is not None
         result = {class_id: [] for class_id in self._current_classes()}
         for index in range(len(self.experience.dataset)):
             item = self.experience.dataset[index]
@@ -727,7 +720,7 @@ class AvalancheTagFex(SupervisedTemplate):
 
         total = sum(len(values) for values in self.memory_by_class.values())
         if total > self.hparams.memory_size:
-            raise AssertionError(f"TagFex replay memory exceeded its cap: {total}")
+            raise RuntimeError(f"TagFex replay memory exceeded its cap: {total}")
 
     def _persist_memory(self) -> None:
         calls = 0

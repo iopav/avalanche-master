@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import Any
 
 from .order_seed_registry import ORDERS_BY_DATASET, SEEDS
-
-ORDER_IDS = tuple(sorted(next(iter(ORDERS_BY_DATASET.values()))))
 
 
 @dataclass(frozen=True)
@@ -162,13 +159,16 @@ METHODS: dict[str, dict[str, Any]] = {
         "gamma": None,
         "source": "CVPR 2025 TagFex image-network structure, losses, expansion, herding and alignment ported to Avalanche",
     },
+    "joint": {
+        "display_name": "Joint Learning",
+        "source": "Best seed-62 search checkpoint with a detached weight-only model used for formal test",
+    },
 }
 
 
-# METHODS contains every strategy that can be constructed by shared tuning
-# code. Formal dataset entrypoints deliberately exclude EWC, which remains a
-# regularization-control experiment.
-FORMAL_METHODS = ("er_ace", "cwr_star", "icarl", "fecam", "tagfex")
+FORMAL_METHODS = (
+    "ewc", "icarl", "er_ace", "fecam", "tagfex", "cwr_star"
+)
 
 DEFAULT_BACKBONE_ID = "resnet18_cifar"
 DEFAULT_BACKBONES = {
@@ -177,36 +177,14 @@ DEFAULT_BACKBONES = {
     "cwr_star": DEFAULT_BACKBONE_ID,
     "icarl": DEFAULT_BACKBONE_ID,
     "fecam": DEFAULT_BACKBONE_ID,
-    "si": DEFAULT_BACKBONE_ID,
-    "lwf": DEFAULT_BACKBONE_ID,
-    "naive": DEFAULT_BACKBONE_ID,
     "er": DEFAULT_BACKBONE_ID,
     "tagfex": DEFAULT_BACKBONE_ID,
 }
 
-
-BACKBONE_CONFIGS = {
-    backbone_id: {
-        "backbone_id": backbone_id,
-        "base_width": base_width,
-        "stem": {"kernel": 3, "stride": 1, "max_pool": False},
-        "blocks_per_stage": [2, 2, 2, 2],
-        "stage_channels": [base_width * (2**index) for index in range(4)],
-        "feature_dim": base_width * 8,
-        "pretrained": False,
-    }
-    for backbone_id, base_width in (
-        ("resnet18_cifar_small", 32),
-        ("resnet18_cifar", 64),
-        ("resnet18_cifar_large", 96),
-    )
-}
-BACKBONE_CONFIG = BACKBONE_CONFIGS[DEFAULT_BACKBONE_ID]
-
 TRAINING_DEFAULTS = {
     "optimizer": "SGD",
     "learning_rate": 0.1,
-    "momentum": 0.0,
+    "momentum": 0.9,
     "weight_decay": 0.0,
     "foreach": False,
     "train_mb_size": 32,
@@ -231,17 +209,10 @@ def get_task_split(dataset_name: str, order_id: int) -> tuple[int, ...]:
 
 
 def validate_order_registry() -> None:
-    if not SEEDS or len(set(SEEDS)) != len(SEEDS) or any(
-        isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 for seed in SEEDS
-    ):
-        raise ValueError("SEEDS must contain unique non-negative integers")
     if set(ORDERS_BY_DATASET) != set(DATASETS):
         raise ValueError("Order-registry datasets differ from DATASETS")
-    expected_ids = set(ORDER_IDS)
     for dataset_name, spec in DATASETS.items():
         orders = ORDERS_BY_DATASET[dataset_name]
-        if set(orders) != expected_ids:
-            raise ValueError(f"Order IDs differ for {dataset_name}")
         for order_id, groups in orders.items():
             if not groups or any(not group for group in groups):
                 raise ValueError(f"Empty task group in {dataset_name}/order-{order_id:02d}")

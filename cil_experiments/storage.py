@@ -75,7 +75,7 @@ def _er_ace_bytes(
     if getattr(storage_policy, "one_hot_labels", False):
         examples = storage_policy.persistent_examples()
         if len(examples) > bundle.strategy.mem_size or len(examples) > 2000:
-            raise AssertionError(f"ER-ACE packed buffer exceeds its cap: {len(examples)}")
+            raise RuntimeError(f"ER-ACE packed buffer exceeds its cap: {len(examples)}")
         sample_bytes = 0
         label_bytes = 0
         shape_metadata_bytes = 0
@@ -87,14 +87,14 @@ def _er_ace_bytes(
             elif isinstance(example, Float32ReplayExample):
                 sample_bytes += counter.tensor(example.data)
             else:
-                raise AssertionError(f"Unexpected ER-ACE replay type: {type(example)!r}")
+                raise TypeError(f"Unexpected ER-ACE replay type: {type(example)!r}")
             label_bytes += counter.numpy(example.label_one_hot)
         auxiliary = counter.value(storage_policy.auxiliary_values())
         auxiliary += 8 * len(storage_policy.seen_classes) + shape_metadata_bytes
         encoding = "1-bit packed" if storage_policy.packed_binary else "float32_input_image"
         return sample_bytes, label_bytes, auxiliary, encoding, "uint8_one_hot"
 
-    raise AssertionError(
+    raise RuntimeError(
         "ER-ACE formal storage must use materialized replay samples with uint8 one-hot labels"
     )
 
@@ -104,23 +104,23 @@ def _icarl_bytes(bundle: StrategyBundle, counter: ByteCounter) -> tuple[int, int
     sample_bytes = 0
     if plugin.pack_binary:
         if plugin.x_memory:
-            raise AssertionError("Packed Spike ICaRL must not retain float32 x_memory between tasks")
+            raise RuntimeError("Packed Spike ICaRL must not retain float32 x_memory between tasks")
         for item in plugin.packed_memory:
             data = item["data"]
             shape = tuple(item["shape"])
             expected = (int(np.prod(shape)) + 7) // 8
             if data.dtype != np.uint8 or data.nbytes != expected:
-                raise AssertionError("Spike packed replay byte count does not match ceil(numel/8)")
+                raise RuntimeError("Spike packed replay byte count does not match ceil(numel/8)")
             sample_bytes += counter.numpy(data)
         encoding = "1-bit packed"
         if len(plugin.packed_memory) != len(plugin.persistent_labels):
-            raise AssertionError("Packed ICaRL sample and label groups are inconsistent")
+            raise RuntimeError("Packed ICaRL sample and label groups are inconsistent")
     else:
         if plugin.y_memory:
-            raise AssertionError("ICaRL must not retain decoded int64 labels between tasks")
+            raise RuntimeError("ICaRL must not retain decoded int64 labels between tasks")
         for tensor in plugin.x_memory:
             if tensor.dtype != torch.float32:
-                raise AssertionError("Non-Spike ICaRL replay samples must be float32")
+                raise TypeError("Non-Spike ICaRL replay samples must be float32")
             sample_bytes += counter.tensor(tensor)
         encoding = "float32_input_image"
     label_bytes = 0
@@ -131,7 +131,7 @@ def _icarl_bytes(bundle: StrategyBundle, counter: ByteCounter) -> tuple[int, int
         labels_count += int(labels.shape[0])
     label_encoding = "uint8_one_hot"
     if labels_count > plugin.memory_size or labels_count > 2000:
-        raise AssertionError(f"ICaRL replay count {labels_count} exceeds cap")
+        raise RuntimeError(f"ICaRL replay count {labels_count} exceeds cap")
     auxiliary = counter.value(plugin.order)
     if plugin.pack_binary:
         auxiliary += sum(8 * len(item["shape"]) for item in plugin.packed_memory)
@@ -153,22 +153,22 @@ def _tagfex_bytes(
         for example in examples:
             if isinstance(example, PackedBinaryExample):
                 if not strategy.pack_binary_replay:
-                    raise AssertionError("Non-Spike TagFex cannot retain packed binary replay")
+                    raise TypeError("Non-Spike TagFex cannot retain packed binary replay")
                 example.validate(strategy.num_classes)
                 sample_bytes += counter.numpy(example.data)
                 label_bytes += counter.numpy(example.label_one_hot)
                 stored_count += 1
             elif isinstance(example, Float32ReplayExample):
                 if strategy.pack_binary_replay:
-                    raise AssertionError("Spike TagFex must not retain float32 replay samples between tasks")
+                    raise TypeError("Spike TagFex must not retain float32 replay samples between tasks")
                 example.validate(strategy.num_classes)
                 sample_bytes += counter.tensor(example.data)
                 label_bytes += counter.numpy(example.label_one_hot)
                 stored_count += 1
             else:
-                raise AssertionError(f"TagFex replay is not persistent: {type(example)!r}")
+                raise TypeError(f"TagFex replay is not persistent: {type(example)!r}")
     if stored_count > strategy.hparams.memory_size or stored_count > 2000:
-        raise AssertionError(f"TagFex replay count {stored_count} exceeds its cap")
+        raise RuntimeError(f"TagFex replay count {stored_count} exceeds its cap")
     auxiliary = counter.value(strategy.class_means)
     auxiliary += counter.value(
         None if strategy.last_ta_net is None else strategy.last_ta_net.state_dict()
@@ -241,5 +241,5 @@ def compute_persistent_storage(bundle: StrategyBundle) -> dict[str, Any]:
         result[key]
         for key in ("model_parameter_bytes", "replay_sample_bytes", "replay_label_bytes", "auxiliary_bytes")
     ):
-        raise AssertionError("Persistent storage components overlap or do not sum")
+        raise RuntimeError("Persistent storage components overlap or do not sum")
     return result

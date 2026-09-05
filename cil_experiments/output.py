@@ -11,10 +11,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .experiment_config import EXPERIMENT_ID, validate_experiment_id
-
 def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False, allow_nan=False) + "\n"
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write a standalone text artifact atomically on its destination volume."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    os.close(fd)
+    staged = Path(name)
+    try:
+        staged.write_text(text, encoding="utf-8")
+        with staged.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        os.replace(staged, path)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def atomic_write_json(path: Path, value: Any) -> None:
+    atomic_write_text(path, json_text(value))
 
 
 def local_timestamp() -> str:
@@ -37,14 +55,12 @@ def run_artifact_paths(
     method: str,
     order_id: int,
     seed: int,
-    experiment_id: int,
+    run_subdir: Path | str | None = None,
 ) -> RunArtifactPaths:
-    experiment_id = validate_experiment_id(experiment_id)
     method_root = result_root / dataset / method
-    stem = (
-        f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
-        f"__exp-{experiment_id}"
-    )
+    if run_subdir is not None:
+        method_root /= Path(run_subdir)
+    stem = f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
     return RunArtifactPaths(
         method_root=method_root,
         log=method_root / "log" / f"{stem}.log",
@@ -60,12 +76,13 @@ def completed_summary_path(
     method: str,
     order_id: int,
     seed: int,
-    experiment_id: int,
+    exp_name: str,
     expected_config: dict[str, Any] | None = None,
+    run_subdir: Path | str | None = None,
 ) -> Path | None:
     """Return a validated completed run, or None when no public artifact exists."""
     paths = run_artifact_paths(
-        result_root, dataset, method, order_id, seed, experiment_id
+        result_root, dataset, method, order_id, seed, run_subdir
     )
     required = (paths.log, paths.summary, paths.accuracy_matrix, paths.config)
     existing = [path for path in required if path.is_file()]
@@ -88,25 +105,24 @@ def completed_summary_path(
         "method": method,
         "order_id": int(order_id),
         "seed": int(seed),
-        "experiment_id": int(experiment_id),
+        "exp_name": exp_name,
     }
     mismatches = {
         key: (matrix.get(key), expected)
         for key, expected in expected_matrix.items()
         if matrix.get(key) != expected
     }
-    if config.get("experiment_id") != int(experiment_id):
-        mismatches["config.experiment_id"] = (
-            config.get("experiment_id"), int(experiment_id)
-        )
+    if summary.get("exp_name") != exp_name:
+        mismatches["summary.exp_name"] = (summary.get("exp_name"), exp_name)
+    if config.get("exp_name") != exp_name:
+        mismatches["config.exp_name"] = (config.get("exp_name"), exp_name)
     normalized_expected_config = (
         json.loads(json_text(expected_config)) if expected_config is not None else None
     )
     if normalized_expected_config is not None and config != normalized_expected_config:
         raise ValueError(
-            "A completed run exists for this experiment ID, but its config differs. "
-            "Use a new EXPERIMENT_ID for a new configuration or pass --overwrite "
-            "to replace this exact small experiment."
+            "A completed run exists for this experiment name, but its config differs. "
+            "Use a new EXP_NAME or overwrite this exact run."
         )
     if mismatches:
         raise ValueError(f"Completed artifact identity mismatch: {mismatches}")
@@ -125,11 +141,10 @@ class AtomicRunArtifacts:
         seed: int,
         config: dict[str, Any],
         overwrite: bool = False,
-        experiment_id: int = EXPERIMENT_ID,
+        run_subdir: Path | str | None = None,
     ):
-        self.experiment_id = validate_experiment_id(experiment_id)
         paths = run_artifact_paths(
-            result_root, dataset, method, order_id, seed, self.experiment_id
+            result_root, dataset, method, order_id, seed, run_subdir
         )
         self.method_root = paths.method_root
         self.log_path = paths.log

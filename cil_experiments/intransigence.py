@@ -9,6 +9,7 @@ from typing import Any
 
 from .metrics import validate_summary
 from .output import json_text
+from .search_config import JOINT_METHOD
 
 
 def _artifact_paths(summary_path: Path) -> tuple[Path, Path]:
@@ -44,17 +45,19 @@ def compute_intransigence(
     cil_matrix: dict[str, Any], joint_matrix: dict[str, Any]
 ) -> list[float]:
     lower = cil_matrix.get("accuracy_matrix_lower_triangular")
-    reference = joint_matrix.get("joint_current_task_accuracy_curve")
+    reference = joint_matrix.get("accuracy_by_task")
     tasks = int(cil_matrix.get("tasks", 0))
     if not isinstance(lower, list) or len(lower) != tasks:
         raise ValueError("CIL accuracy matrix task dimension is invalid")
     if not isinstance(reference, list) or len(reference) != tasks:
-        raise ValueError("Joint current-task curve task dimension is invalid")
+        raise ValueError("Joint reference accuracy row task dimension is invalid")
     values: list[float] = []
     for index in range(tasks):
         row = lower[index]
         if not isinstance(row, list) or len(row) != tasks or row[index] is None:
             raise ValueError(f"Missing CIL diagonal accuracy at task {index + 1}")
+        if reference[index] is None:
+            raise ValueError(f"Missing joint reference accuracy at task {index + 1}")
         values.append(float(reference[index]) - float(row[index]))
     return values
 
@@ -65,16 +68,14 @@ def _validate_identity(
     joint_matrix: dict[str, Any],
     joint_config: dict[str, Any],
 ) -> None:
-    identity_keys = ("dataset", "order_id", "seed", "experiment_id")
+    identity_keys = ("dataset", "order_id", "seed", "exp_name")
     mismatches = {
         key: (cil_matrix.get(key), joint_matrix.get(key))
         for key in identity_keys
         if cil_matrix.get(key) != joint_matrix.get(key)
     }
-    if joint_matrix.get("paired_method") != cil_matrix.get("method"):
-        mismatches["paired_method"] = (
-            cil_matrix.get("method"), joint_matrix.get("paired_method")
-        )
+    if joint_matrix.get("method") != JOINT_METHOD:
+        mismatches["method"] = (joint_matrix.get("method"), JOINT_METHOD)
     if _backbone_id(cil_config) != _backbone_id(joint_config):
         mismatches["backbone_id"] = (
             _backbone_id(cil_config), _backbone_id(joint_config)
@@ -87,14 +88,8 @@ def _validate_identity(
     joint_groups = joint_config.get("selected_task_groups")
     if cil_groups != joint_groups:
         mismatches["selected_task_groups"] = (cil_groups, joint_groups)
-    cil_parameters = cil_config.get("final_hyperparameters", {}).get("resolved")
-    joint_parameters = joint_config.get("training", {}).get(
-        "paired_training_parameters"
-    )
-    if cil_parameters != joint_parameters:
-        mismatches["training_parameters"] = (cil_parameters, joint_parameters)
     if mismatches:
-        raise ValueError(f"CIL/Joint identity mismatch: {mismatches}")
+        raise ValueError(f"CIL/joint-learning identity mismatch: {mismatches}")
 
 
 def validate_joint_artifact_match(
@@ -102,21 +97,26 @@ def validate_joint_artifact_match(
     cil_config: dict[str, Any],
     joint_summary_path: Path,
 ) -> None:
-    joint_summary, joint_matrix, joint_config = _read_run(joint_summary_path)
-    validate_summary(joint_summary)
-    _validate_identity(cil_matrix_identity, cil_config, joint_matrix, joint_config)
+    joint_summary, joint_matrix, joint_config = _read_run(
+        joint_summary_path
+    )
+    validate_summary(joint_summary, allow_pending_intransigence=True)
+    _validate_identity(
+        cil_matrix_identity, cil_config, joint_matrix, joint_config
+    )
     tasks = int(cil_matrix_identity["tasks"])
-    curve = joint_matrix.get("joint_current_task_accuracy_curve")
-    if int(joint_summary["tasks"]) != tasks or not isinstance(curve, list) or len(curve) != tasks:
-        raise ValueError("Joint task count/current-task curve does not match the CIL run")
+    if int(joint_summary["tasks"]) != tasks:
+        raise ValueError("Joint-learning task count does not match the CIL run")
 
 
 def fill_intransigence(cil_summary_path: Path, joint_summary_path: Path) -> list[float]:
     cil_summary, cil_matrix, cil_config = _read_run(cil_summary_path)
-    joint_summary, joint_matrix, joint_config = _read_run(joint_summary_path)
+    joint_summary, joint_matrix, joint_config = _read_run(
+        joint_summary_path
+    )
     _validate_identity(cil_matrix, cil_config, joint_matrix, joint_config)
     if int(cil_summary["tasks"]) != int(joint_summary["tasks"]):
-        raise ValueError("CIL/Joint task counts differ")
+        raise ValueError("CIL/joint-learning task counts differ")
     values = compute_intransigence(cil_matrix, joint_matrix)
     cil_summary["cil_performance"]["intransigence"] = values
     validate_summary(cil_summary)
@@ -137,26 +137,22 @@ def fill_intransigence(cil_summary_path: Path, joint_summary_path: Path) -> list
 
 
 def find_joint_summary(
-    result_root: Path,
+    joint_result_root: Path,
     *,
     dataset: str,
-    paired_method: str,
     order_id: int,
     seed: int,
-    experiment_id: int,
 ) -> Path:
-    joint_method = f"joint_{paired_method}"
-    pattern = (
-        f"{dataset}__{joint_method}__order-{order_id:02d}__seed-{seed:03d}"
-        f"__exp-{experiment_id}__summary.json"
+    path = (
+        Path(joint_result_root)
+        / dataset
+        / JOINT_METHOD
+        / "summary"
+        / f"{dataset}__{JOINT_METHOD}__order-{order_id:02d}__seed-{seed:03d}__summary.json"
     )
-    matches = sorted((result_root / dataset / joint_method / "summary").glob(pattern))
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"Expected exactly one matching Joint summary for {dataset}/{paired_method}/"
-            f"order-{order_id:02d}/seed-{seed:03d}, found {len(matches)}: {matches}"
-        )
-    return matches[0]
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing joint-learning reference: {path}")
+    return path
 
 
 def main() -> None:
@@ -164,7 +160,9 @@ def main() -> None:
     parser.add_argument("--cil-summary", type=Path, required=True)
     parser.add_argument("--joint-summary", type=Path, required=True)
     args = parser.parse_args()
-    values = fill_intransigence(args.cil_summary.resolve(), args.joint_summary.resolve())
+    values = fill_intransigence(
+        args.cil_summary.resolve(), args.joint_summary.resolve()
+    )
     print(json.dumps({"intransigence": values}, ensure_ascii=False))
 
 

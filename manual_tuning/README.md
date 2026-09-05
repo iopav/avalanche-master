@@ -11,7 +11,7 @@ DATA_MODE = "mini"  # "mini" or "full"
 BACKBONE_ID = "resnet18_cifar"  # small, standard, or large
 ```
 
-`DATA_MODE` accepts `mini` or `full`; `BACKBONE_ID` accepts `resnet18_cifar_small`, `resnet18_cifar`, or `resnet18_cifar_large`.
+`DATA_MODE` accepts `mini` or `full`; `BACKBONE_ID` accepts `resnet18_cifar` or `temporal`.
 
 Edit only the `PARAMETERS`, `ORDER_ID`, `SEED`, `EPOCHS` and `DEVICE` constants near the top of a script, then run it from the `py310` environment. Every script now explicitly uses `DEVICE = "cuda"`; CUDA unavailability is an error and never silently falls back to CPU. At startup the runner prints the resolved CUDA device name and verifies that every model parameter is on the requested device. Example:
 

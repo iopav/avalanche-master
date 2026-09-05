@@ -13,14 +13,14 @@ def validate_uint8_one_hot(
 ) -> None:
     """Validate one label vector or a batch of labels in persistent format."""
     if labels.dtype != np.uint8 or labels.ndim not in (1, 2):
-        raise AssertionError("Packed replay labels must be uint8 one-hot vectors or matrices")
+        raise TypeError("Packed replay labels must be uint8 one-hot vectors or matrices")
     if labels.shape[-1] == 0:
-        raise AssertionError("Packed replay one-hot labels must have a positive width")
+        raise ValueError("Packed replay one-hot labels must have a positive width")
     if num_classes is not None and labels.shape[-1] != int(num_classes):
-        raise AssertionError("Packed replay one-hot width does not match the dataset class count")
+        raise ValueError("Packed replay one-hot width does not match the dataset class count")
     rows = labels.reshape(-1, labels.shape[-1])
     if not np.logical_or(rows == 0, rows == 1).all() or not np.all(rows.sum(axis=1) == 1):
-        raise AssertionError("Packed replay label is not one-hot")
+        raise ValueError("Packed replay label is not one-hot")
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ class PackedBinaryExample:
     def validate(self, num_classes: int | None = None) -> None:
         expected = (self.numel + 7) // 8
         if self.data.dtype != np.uint8 or self.data.ndim != 1 or self.data.nbytes != expected:
-            raise AssertionError(
+            raise RuntimeError(
                 f"Packed replay sample uses {self.data.nbytes} bytes, expected ceil({self.numel}/8)={expected}"
             )
         validate_uint8_one_hot(self.label_one_hot, num_classes)
@@ -109,9 +109,9 @@ class Float32ReplayExample:
 
     def validate(self, num_classes: int | None = None) -> None:
         if self.data.device.type != "cpu" or self.data.dtype != torch.float32:
-            raise AssertionError("Floating replay samples must persist as CPU float32 tensors")
+            raise TypeError("Floating replay samples must persist as CPU float32 tensors")
         if not self.data.is_contiguous():
-            raise AssertionError("Floating replay samples must be contiguous")
+            raise RuntimeError("Floating replay samples must be contiguous")
         validate_uint8_one_hot(self.label_one_hot, num_classes)
 
 
@@ -192,7 +192,7 @@ class ClassBalancedPersistentBuffer:
         dataset = exp.dataset
         targets = getattr(dataset, "targets", None)
         if targets is None:
-            raise AssertionError("Packed ER-ACE replay requires dataset targets")
+            raise ValueError("Packed ER-ACE replay requires dataset targets")
         indices_by_class: dict[int, list[int]] = {}
         for index, target in enumerate(targets):
             indices_by_class.setdefault(int(target), []).append(index)

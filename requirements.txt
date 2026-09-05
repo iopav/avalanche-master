@@ -1,17 +1,23 @@
-typing-extensions>=4.6.0
+# PyTorch 与数值计算
+torch
+torchvision
+torchmetrics
+numpy
+scikit-learn
+
+# PP2 的 FLOPs、系统资源与求解器统计
+fvcore
 psutil
 gputil
-scikit-learn
+qpsolvers[open_source_solvers]
+
+# 本地 Avalanche 源码运行依赖
+typing-extensions>=4.6.0
 matplotlib
-numpy
 pytorchcv
 wandb
 tensorboard>=1.15
 tqdm
-torch
-torchvision
-torchmetrics
 gdown
 dill
 packaging
-qpsolvers[open_source_solvers]

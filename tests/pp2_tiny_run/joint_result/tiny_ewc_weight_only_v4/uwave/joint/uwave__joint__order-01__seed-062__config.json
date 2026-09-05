@@ -1,0 +1,186 @@
+{
+  "schema": "metrics1.docx-compatible-avalanche-cil-v2",
+  "dataset": {
+    "name": "uwave",
+    "train_x": "uwave/raw_x.npy",
+    "train_y": "uwave/raw_y.npy",
+    "test_x": "uwave/raw_test_x.npy",
+    "test_y": "uwave/raw_test_y.npy",
+    "train_shape": [
+      8,
+      8,
+      8,
+      3
+    ],
+    "test_shape": [
+      4,
+      8,
+      8,
+      3
+    ],
+    "source_x_dtype": "float32",
+    "num_classes": 2,
+    "timesteps": 8,
+    "in_channels": 3,
+    "image_train_x": "uwave/image_x.npy",
+    "image_train_y": "uwave/image_y.npy",
+    "image_test_x": "uwave/test_image_x.npy",
+    "image_test_y": "uwave/test_image_y.npy",
+    "image_train_shape": [
+      8,
+      3,
+      8,
+      8
+    ],
+    "image_test_shape": [
+      4,
+      3,
+      8,
+      8
+    ],
+    "image_x_dtype": "float32",
+    "image_layout": "NCHW"
+  },
+  "method": "joint",
+  "method_parameters": {
+    "display_name": "Joint Learning",
+    "source": "Best seed-62 search checkpoint with a detached weight-only model used for formal test"
+  },
+  "backbone": {
+    "backbone_id": "temporal",
+    "feature_dim": 32,
+    "feature_dim_per_branch": null,
+    "base_width": 8,
+    "stage_channels": [
+      8,
+      16,
+      32
+    ],
+    "pretrained": false,
+    "status": "registered_shared_backbone"
+  },
+  "training": {
+    "optimizer": "SGD",
+    "learning_rate": 0.1,
+    "momentum": 0.0,
+    "weight_decay": 0.0,
+    "foreach": false,
+    "train_mb_size": 32,
+    "eval_mb_size": 128,
+    "num_workers": 0,
+    "requested_epochs_per_experience": 1,
+    "effective_sgd_epochs_per_experience": [
+      1,
+      1
+    ],
+    "fecam_later_experience_loop": null
+  },
+  "protocol": {
+    "augmentation": "none",
+    "normalization": "none",
+    "input_view_id": "uwave_stored_rgb_image_v1",
+    "technical_input_conversion": "stored RGB float32 image view",
+    "classes_per_experience": [
+      1,
+      1
+    ],
+    "replay_budget_cap_samples": 2000,
+    "spike_replay_persistence": null,
+    "spike_replay_label_persistence": null,
+    "flop_backend": "torch.utils.flop_counter.FlopCounterMode",
+    "flop_convention": "1 MAC = 2 FLOPs; no post-hoc doubling of PyTorch 2.11 totals",
+    "tagfex_two_view_policy": null
+  },
+  "order_registry_source": "cil_experiments/order_seed_registry.py",
+  "selected_task_groups": [
+    [
+      0
+    ],
+    [
+      1
+    ]
+  ],
+  "dataset_orders": {
+    "1": [
+      [
+        0
+      ],
+      [
+        1
+      ]
+    ]
+  },
+  "seeds": [
+    62,
+    63,
+    64,
+    65,
+    66
+  ],
+  "final_hyperparameters": {
+    "source": "cil_experiments/final_hyperparameters.py",
+    "registry_locked": true,
+    "resolved": {
+      "optimizer": "SGD",
+      "learning_rate": 0.1,
+      "momentum": 0.0,
+      "weight_decay": 0.0,
+      "foreach": false,
+      "train_mb_size": 32,
+      "eval_mb_size": 128,
+      "num_workers": 0,
+      "epochs_per_experience": 1,
+      "ewc_lambda": 0.4,
+      "mode": "separate"
+    },
+    "explicit_diagnostic_overrides": {
+      "optimizer": "SGD",
+      "learning_rate": 0.1,
+      "momentum": 0.0,
+      "weight_decay": 0.0,
+      "foreach": false,
+      "train_mb_size": 32,
+      "eval_mb_size": 128,
+      "num_workers": 0,
+      "epochs_per_experience": 1,
+      "ewc_lambda": 0.4,
+      "mode": "separate"
+    }
+  },
+  "hyperparameter_search": {
+    "status": "explicit_diagnostic_hyperparameter_override",
+    "required_trials": 3,
+    "test_set_used_for_selection": false,
+    "hyperparameter_search_flops": 0
+  },
+  "summary_null_reasons": {
+    "network.total_reused_neurons": "No comparable explicit neuron-reuse mechanism.",
+    "training_runtime.total_gpu_ms": "null only for CPU execution.",
+    "working_memory_diagnostic.native_peak_allocated_gpu_memory_mib": "null only for CPU execution.",
+    "cil_performance.intransigence": "Joint reference does not define intransigence against itself.",
+    "inference.final_latency_ms_per_sample": "Final latency is measured only for formal runs."
+  },
+  "software": {
+    "python": "3.10.20",
+    "torch": "2.11.0+cu128",
+    "cuda_runtime": "12.8",
+    "avalanche": "0.6.0a"
+  },
+  "exp_name": "tiny_ewc_weight_only_v4",
+  "data_role": "formal_joint_checkpoint_evaluation",
+  "intransigence": {
+    "automatic_fill_enabled": false,
+    "joint_summary_path": null,
+    "pending_results_are_formal_aggregation_eligible": true
+  },
+  "checkpoint_evaluation": {
+    "checkpoint_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\uwave\\ewc\\checkpoint\\uwave__ewc__order-01__seed-062__best.pt",
+    "source_method": "ewc",
+    "source_search_seed": 62,
+    "source_summary_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\uwave\\ewc\\order-01\\lr-0.1\\summary\\uwave__ewc__order-01__seed-062__summary.json",
+    "strategy_saved_in_checkpoint": true,
+    "evaluation_uses_weight_only_model": true,
+    "method_class_statistics_loaded": false,
+    "formal_retraining_performed": false
+  }
+}

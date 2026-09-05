@@ -1,0 +1,122 @@
+{
+  "metadata": {
+    "exp_name": "tiny_ewc_weight_only_v4",
+    "dataset": "spike",
+    "method": "ewc",
+    "search_seed": 62,
+    "lr_candidates": [
+      0.1,
+      0.05,
+      0.01
+    ],
+    "acc_tolerance": 0.005,
+    "search_storage_definition": "selected_model_parameter_bytes",
+    "validation_split_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\spike\\validation_split.json",
+    "started_at": "2026-09-05T14:53:15+08:00",
+    "finished_at": "2026-09-05T14:53:16+08:00",
+    "status": "completed",
+    "search_epochs": 1,
+    "backbone_id": "temporal"
+  },
+  "search_runs": {
+    "order1": {
+      "0.1": {
+        "status": "completed",
+        "summary_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\spike\\ewc\\order-01\\lr-0.1\\summary\\spike__ewc__order-01__seed-062__summary.json",
+        "val_avg_acc": 0.5,
+        "val_average_incremental_accuracy": 0.75,
+        "overall_learning_flops": 1337360744,
+        "storage_param_bytes": 24392,
+        "replay_sample_label_bytes": 0,
+        "auxiliary_bytes": 97570,
+        "total_bytes": 121962,
+        "checkpoint_retained": true,
+        "hyperparameters": {
+          "optimizer": "SGD",
+          "learning_rate": 0.1,
+          "momentum": 0.0,
+          "weight_decay": 0.0,
+          "foreach": false,
+          "train_mb_size": 32,
+          "eval_mb_size": 128,
+          "num_workers": 0,
+          "epochs_per_experience": 1,
+          "ewc_lambda": 0.4,
+          "mode": "separate"
+        },
+        "finished_at": "2026-09-05T14:53:15+08:00",
+        "checkpoint_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\spike\\ewc\\checkpoint\\spike__ewc__order-01__seed-062__best.pt"
+      },
+      "0.05": {
+        "status": "completed",
+        "summary_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\spike\\ewc\\order-01\\lr-0.05\\summary\\spike__ewc__order-01__seed-062__summary.json",
+        "val_avg_acc": 0.5,
+        "val_average_incremental_accuracy": 0.75,
+        "overall_learning_flops": 1337360744,
+        "storage_param_bytes": 24392,
+        "replay_sample_label_bytes": 0,
+        "auxiliary_bytes": 97570,
+        "total_bytes": 121962,
+        "checkpoint_retained": false,
+        "hyperparameters": {
+          "optimizer": "SGD",
+          "learning_rate": 0.05,
+          "momentum": 0.0,
+          "weight_decay": 0.0,
+          "foreach": false,
+          "train_mb_size": 32,
+          "eval_mb_size": 128,
+          "num_workers": 0,
+          "epochs_per_experience": 1,
+          "ewc_lambda": 0.4,
+          "mode": "separate"
+        },
+        "finished_at": "2026-09-05T14:53:15+08:00"
+      },
+      "0.01": {
+        "status": "completed",
+        "summary_file": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\spike\\ewc\\order-01\\lr-0.01\\summary\\spike__ewc__order-01__seed-062__summary.json",
+        "val_avg_acc": 0.5,
+        "val_average_incremental_accuracy": 0.75,
+        "overall_learning_flops": 1337360744,
+        "storage_param_bytes": 24392,
+        "replay_sample_label_bytes": 0,
+        "auxiliary_bytes": 97570,
+        "total_bytes": 121962,
+        "checkpoint_retained": false,
+        "hyperparameters": {
+          "optimizer": "SGD",
+          "learning_rate": 0.01,
+          "momentum": 0.0,
+          "weight_decay": 0.0,
+          "foreach": false,
+          "train_mb_size": 32,
+          "eval_mb_size": 128,
+          "num_workers": 0,
+          "epochs_per_experience": 1,
+          "ewc_lambda": 0.4,
+          "mode": "separate"
+        },
+        "finished_at": "2026-09-05T14:53:16+08:00"
+      }
+    }
+  },
+  "best_per_order": [
+    0.1
+  ],
+  "best_checkpoint_per_order": {
+    "order1": "D:\\workspace\\Avalanche\\avalanche-master\\tests\\pp2_tiny_run\\search_result_tiny_ewc_weight_only_v4\\spike\\ewc\\checkpoint\\spike__ewc__order-01__seed-062__best.pt"
+  },
+  "search_metrics": {
+    "search_flops_each_order": [
+      4012082232
+    ],
+    "search_flops_mean": 4012082232.0,
+    "search_flops_ci95": 0.0,
+    "search_storage_each_order": [
+      24392
+    ],
+    "search_storage_mean": 24392.0,
+    "search_storage_ci95": 0.0
+  }
+}

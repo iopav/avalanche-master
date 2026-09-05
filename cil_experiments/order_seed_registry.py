@@ -8,6 +8,8 @@ from __future__ import annotations
 
 
 SEEDS = (62, 63, 64, 65, 66)
+SEARCH_SEED = SEEDS[0]
+FORMAL_SEEDS = SEEDS[1:]
 
 ORDERS_BY_DATASET: dict[str, dict[int, tuple[tuple[int, ...], ...]]] = {
     "spike": {

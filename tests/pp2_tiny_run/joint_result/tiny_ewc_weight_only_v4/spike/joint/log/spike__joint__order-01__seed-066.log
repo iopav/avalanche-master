@@ -1,0 +1,4 @@
+2026-09-05 14:53:16,795 | INFO | joint_checkpoint=D:\workspace\Avalanche\avalanche-master\tests\pp2_tiny_run\search_result_tiny_ewc_weight_only_v4\spike\ewc\checkpoint\spike__ewc__order-01__seed-062__best.pt
+2026-09-05 14:53:16,795 | INFO | source_method=ewc source_seed=62
+2026-09-05 14:53:16,795 | INFO | formal_training_performed=false strategy_or_class_statistics_used=false
+2026-09-05 14:53:16,795 | INFO | accuracy_by_task=[0.0, 1.0]

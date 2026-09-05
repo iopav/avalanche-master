@@ -1,6 +1,6 @@
 """Auditable continual-learning experiments built on Avalanche."""
 
-from .registry import DATASETS, METHODS, ORDER_IDS, ORDERS_BY_DATASET, SEEDS
+from .registry import DATASETS, METHODS, ORDERS_BY_DATASET, SEEDS
 from .final_hyperparameters import (
     FINAL_HYPERPARAMETERS,
     FINAL_HYPERPARAMETERS_LOCKED,
@@ -10,7 +10,6 @@ from .final_hyperparameters import (
 __all__ = [
     "DATASETS",
     "METHODS",
-    "ORDER_IDS",
     "ORDERS_BY_DATASET",
     "SEEDS",
     "FINAL_HYPERPARAMETERS",

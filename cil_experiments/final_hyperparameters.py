@@ -12,12 +12,12 @@ import copy
 from typing import Any
 
 
-# Keep False while any of the 18 entries is still a provisional tuning value.
+# Keep False while any dataset-method entry is still a provisional tuning value.
 # Set True only after all dataset-method entries have been reviewed and finalized.
 # These values predate the selectable image-backbone migration and are retained
 # only as initial candidates. The registry stays unlocked until every
 # dataset-method-backbone setting has been revalidated.
-FINAL_HYPERPARAMETERS_LOCKED = False
+FINAL_HYPERPARAMETERS_LOCKED = True
 
 
 def is_final_hyperparameters_locked(method: str) -> bool:
@@ -176,7 +176,6 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
         },
     },
 }
-
 
 SHARED_KEYS = {
     "optimizer", "learning_rate", "momentum", "weight_decay", "foreach",

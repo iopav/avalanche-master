@@ -1,0 +1,223 @@
+{
+  "schema": "formal-cil-aggregate-v1",
+  "exp_name": "tiny_ewc_weight_only_v4",
+  "datasets": [
+    "spike",
+    "texture",
+    "uwave"
+  ],
+  "methods": [
+    "ewc"
+  ],
+  "order_ids_by_dataset": {
+    "spike": [
+      1
+    ],
+    "texture": [
+      1
+    ],
+    "uwave": [
+      1
+    ]
+  },
+  "seeds": [
+    63,
+    64,
+    65,
+    66
+  ],
+  "groups": [
+    {
+      "dataset": "spike",
+      "method": "ewc",
+      "backbone_id": "temporal",
+      "n": 4,
+      "metrics": {
+        "average_incremental_accuracy": {
+          "mean": 0.75,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "final_average_accuracy": {
+          "mean": 0.5,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "average_forgetting": {
+          "mean": 1.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "overall_learning_flops": {
+          "mean": 1783212477.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "training_runtime_s": {
+          "mean": 0.13315270000020973,
+          "ci95": 0.005470075950600842,
+          "std": 0.003438136989692547,
+          "n": 4
+        },
+        "persistent_storage_bytes": {
+          "mean": 121962.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "inference_latency_ms_per_sample": {
+          "mean": 0.4553875041892752,
+          "ci95": 0.060267557632636526,
+          "std": 0.03788030020907387,
+          "n": 4
+        }
+      },
+      "intransigence_by_stage": [
+        {
+          "mean": -1.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        {
+          "mean": 0.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        }
+      ]
+    },
+    {
+      "dataset": "texture",
+      "method": "ewc",
+      "backbone_id": "temporal",
+      "n": 4,
+      "metrics": {
+        "average_incremental_accuracy": {
+          "mean": 0.75,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "final_average_accuracy": {
+          "mean": 0.5,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "average_forgetting": {
+          "mean": 1.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "overall_learning_flops": {
+          "mean": 4680125.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "training_runtime_s": {
+          "mean": 0.10540007500094362,
+          "ci95": 0.03473869493064894,
+          "std": 0.021834503413355712,
+          "n": 4
+        },
+        "persistent_storage_bytes": {
+          "mean": 121962.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "inference_latency_ms_per_sample": {
+          "mean": 0.20760001643793657,
+          "ci95": 0.04214628020628244,
+          "std": 0.026490433819159297,
+          "n": 4
+        }
+      },
+      "intransigence_by_stage": [
+        {
+          "mean": -1.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        {
+          "mean": 0.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        }
+      ]
+    },
+    {
+      "dataset": "uwave",
+      "method": "ewc",
+      "backbone_id": "temporal",
+      "n": 4,
+      "metrics": {
+        "average_incremental_accuracy": {
+          "mean": 0.75,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "final_average_accuracy": {
+          "mean": 0.5,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "average_forgetting": {
+          "mean": 1.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "overall_learning_flops": {
+          "mean": 4680125.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "training_runtime_s": {
+          "mean": 0.09676917499746196,
+          "ci95": 0.007478837382260025,
+          "std": 0.004700714885141437,
+          "n": 4
+        },
+        "persistent_storage_bytes": {
+          "mean": 121962.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        "inference_latency_ms_per_sample": {
+          "mean": 0.25338750128867105,
+          "ci95": 0.1915894910704138,
+          "std": 0.12042079891289365,
+          "n": 4
+        }
+      },
+      "intransigence_by_stage": [
+        {
+          "mean": -1.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        },
+        {
+          "mean": 0.0,
+          "ci95": 0.0,
+          "std": 0.0,
+          "n": 4
+        }
+      ]
+    }
+  ]
+}

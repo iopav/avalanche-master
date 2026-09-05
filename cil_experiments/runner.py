@@ -4,6 +4,7 @@ import json
 import platform
 import statistics
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .data import DatasetBundle, build_dataset_bundle
+from .data import build_dataset_bundle
+from .checkpointing import load_search_checkpoint, load_weight_checkpoint, save_search_checkpoint
 from .flops import (
     PhaseFlopProfiler,
     profile_single_forward,
@@ -19,7 +21,6 @@ from .flops import (
     summarize_learning_flops,
 )
 from .final_hyperparameters import get_final_hyperparameters, is_final_hyperparameters_locked
-from .experiment_config import EXPERIMENT_ID, validate_experiment_id
 from .hyperparameter_search_flops import get_hyperparameter_search_flops
 from .intransigence import (
     fill_intransigence,
@@ -28,12 +29,12 @@ from .intransigence import (
 )
 from .metrics import compute_cil_metrics, validate_summary
 from .models import BACKBONES
+from .order_seed_registry import SEARCH_SEED
 from .output import AtomicRunArtifacts, completed_summary_path
 from .registry import (
     DATASETS,
     DEFAULT_BACKBONES,
     METHODS,
-    ORDER_IDS,
     ORDERS_BY_DATASET,
     SEEDS,
     TRAINING_DEFAULTS,
@@ -360,7 +361,7 @@ def _train_experience(
     return flop_result, wall_s, gpu_ms, peak_mib
 
 
-def run_one(
+def run_experiment(
     project_root: Path,
     dataset_root: Path,
     result_root: Path,
@@ -376,14 +377,23 @@ def run_one(
     backbone_id: str | None = None,
     compute_intransigence_enabled: bool = True,
     joint_summary_path: Path | None = None,
-    experiment_id: int = EXPERIMENT_ID,
+    exp_name: str = "experiment",
     resume: bool = False,
+    data_role: str = "formal",
+    run_subdir: Path | str | None = None,
+    joint_result_root: Path | None = None,
+    measure_latency: bool = True,
+    checkpoint_path: Path | None = None,
 ) -> Path:
-    experiment_id = validate_experiment_id(experiment_id)
-    if seed not in SEEDS:
-        raise ValueError(f"Seed {seed} is not in the locked seed registry")
-    if order_id not in ORDER_IDS:
-        raise ValueError(f"Order {order_id} is not in the locked order registry")
+    if dataset_name not in DATASETS:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+    if method not in METHODS:
+        raise ValueError(f"Unknown method: {method}")
+    if method == "joint":
+        raise ValueError(
+            "Joint learning is evaluated from the best seed-62 search checkpoint; "
+            "it is not trained by run_experiment()."
+        )
     resolved_overrides = dict(parameter_overrides or {})
     if epochs is not None:
         resolved_overrides["epochs_per_experience"] = int(epochs)
@@ -391,7 +401,7 @@ def run_one(
         dataset_name,
         method,
         resolved_overrides or None,
-        require_locked=not bool(resolved_overrides),
+        require_locked=data_role == "formal" and not bool(resolved_overrides),
     )
     epochs = int(resolved_hyperparameters["epochs_per_experience"])
     num_workers = int(resolved_hyperparameters["num_workers"])
@@ -401,9 +411,8 @@ def run_one(
         raise ValueError(
             f"Unknown backbone {resolved_backbone_id!r}; registered={sorted(BACKBONES)}"
         )
-    input_view = "image"
     data = build_dataset_bundle(
-        dataset_root, DATASETS[dataset_name], order_id, input_view=input_view
+        dataset_root, DATASETS[dataset_name], order_id, data_role=data_role
     )
     hyperparameter_search_flops = _resolve_hyperparameter_search_flops(
         project_root, dataset_name, method, search_provenance
@@ -421,31 +430,39 @@ def run_one(
         resolved_backbone_id,
         data.input_view_id,
     )
-    config["experiment_id"] = experiment_id
+    config["exp_name"] = exp_name
+    config["data_role"] = data_role
     matched_joint_summary = None
-    if compute_intransigence_enabled:
-        matched_joint_summary = (
-            joint_summary_path.resolve()
-            if joint_summary_path is not None
-            else find_joint_summary(
-                result_root,
+    use_intransigence = (
+        compute_intransigence_enabled and data_role == "formal" and method != "joint"
+    )
+    if use_intransigence:
+        if joint_summary_path is not None:
+            matched_joint_summary = joint_summary_path.resolve()
+        elif joint_result_root is not None:
+            matched_joint_summary = find_joint_summary(
+                joint_result_root,
                 dataset=dataset_name,
-                paired_method=method,
                 order_id=order_id,
                 seed=seed,
-                experiment_id=experiment_id,
             )
-        )
+        else:
+            raise ValueError("joint_result_root is required for formal intransigence")
     config["intransigence"] = {
-        "automatic_fill_enabled": bool(compute_intransigence_enabled),
+        "automatic_fill_enabled": use_intransigence,
         "joint_summary_path": (
-            str(matched_joint_summary) if matched_joint_summary is not None else None
+            str(matched_joint_summary)
+            if matched_joint_summary is not None else None
         ),
         "pending_results_are_formal_aggregation_eligible": False,
     }
-    if not compute_intransigence_enabled:
+    if not use_intransigence:
         config["summary_null_reasons"]["cil_performance.intransigence"] = (
-            "Automatic Joint matching was explicitly disabled with --skip-intransigence."
+            "Disabled for search/joint learning or explicitly skipped for this formal run."
+        )
+    if not measure_latency:
+        config["summary_null_reasons"]["inference.final_latency_ms_per_sample"] = (
+            "Final latency is measured only for formal runs."
         )
     elif matched_joint_summary is not None:
         validate_joint_artifact_match(
@@ -454,8 +471,8 @@ def run_one(
                 "method": method,
                 "order_id": int(order_id),
                 "seed": int(seed),
+                "exp_name": exp_name,
                 "tasks": int(data.tasks),
-                "experiment_id": experiment_id,
             },
             config,
             matched_joint_summary,
@@ -467,13 +484,18 @@ def run_one(
             method,
             order_id,
             seed,
-            experiment_id,
+            exp_name,
             expected_config=config,
+            run_subdir=run_subdir,
         )
         if completed is not None:
+            if checkpoint_path is not None and not Path(checkpoint_path).is_file():
+                raise RuntimeError(
+                    f"Completed search artifact is missing its model checkpoint: {checkpoint_path}"
+                )
             print(
                 "SKIP completed "
-                f"exp={experiment_id} dataset={dataset_name} method={method} "
+                f"exp={exp_name} dataset={dataset_name} method={method} "
                 f"order={order_id} seed={seed}: {completed}"
             )
             return completed
@@ -486,10 +508,9 @@ def run_one(
         seed,
         config,
         overwrite,
-        experiment_id,
+        run_subdir,
     ) as artifacts:
         log = artifacts.logger
-        assert log is not None
         log.info("run=%s dataset=%s method=%s order_id=%d seed=%d epochs=%d device=%s", artifacts.summary_path.stem, dataset_name, method, order_id, seed, epochs, device)
         log.info("data_contract=%s", json.dumps(dataset_dict(data.spec), ensure_ascii=False, sort_keys=True))
         log.info("raw_order=%s", list(data.raw_order))
@@ -542,7 +563,6 @@ def run_one(
         task_peaks: list[float] = []
         task_flops = []
         terminal_values: list[float] = []
-
         for task_index, experience in enumerate(data.benchmark.train_stream):
             result, wall_s, gpu_ms, peak_mib = _train_experience(
                 bundle, experience, device, num_workers
@@ -579,12 +599,15 @@ def run_one(
         sample_x = data.test[0][0].unsqueeze(0).to(device)
         single_forward_flops, single_detail = profile_single_forward(model, sample_x)
         fvcore_check = _fvcore_crosscheck(model, sample_x)
-        latency = _measure_latency(
-            model,
-            list(data.benchmark.test_stream),
-            device,
-            int(resolved_hyperparameters["eval_mb_size"]),
-            num_workers,
+        latency = (
+            _measure_latency(
+                model,
+                list(data.benchmark.test_stream),
+                device,
+                int(resolved_hyperparameters["eval_mb_size"]),
+                num_workers,
+            )
+            if measure_latency else None
         )
         storage = compute_persistent_storage(bundle)
         cil = compute_cil_metrics(matrix, data.test_samples_per_task)
@@ -595,6 +618,7 @@ def run_one(
             single_forward_flops,
         )
         summary = {
+            "exp_name": exp_name,
             "method": METHODS[method]["display_name"],
             "seed": int(seed),
             "tasks": int(data.tasks),
@@ -614,7 +638,11 @@ def run_one(
                 "auxiliary_nonflop_ops": summarize_auxiliary_nonflop_ops(task_flops),
             },
             "persistent_storage": storage,
-            "inference": {"final_latency_ms_per_sample": float(latency)},
+            "inference": {
+                "final_latency_ms_per_sample": (
+                    float(latency) if latency is not None else None
+                )
+            },
             "working_memory_diagnostic": {
                 "native_peak_allocated_gpu_memory_mib": float(max(task_peaks)) if task_peaks else None,
                 "note": "Transient working memory; excluded from persistent storage.",
@@ -637,7 +665,8 @@ def run_one(
             "input_view_id": data.input_view_id,
             "order_id": int(order_id),
             "seed": int(seed),
-            "experiment_id": experiment_id,
+            "exp_name": exp_name,
+            "data_role": data_role,
             "tasks": int(data.tasks),
             "orientation": "row=train experience end; column=evaluated test experience",
             "upper_triangle": "null because the corresponding class experience had not been learned yet",
@@ -645,11 +674,234 @@ def run_one(
             "accuracy_matrix_lower_triangular": lower_triangular,
         }
         artifacts.commit(summary, accuracy_matrix)
+        if checkpoint_path is not None:
+            save_search_checkpoint(
+                bundle,
+                {
+                    "dataset": dataset_name,
+                    "method": method,
+                    "order_id": int(order_id),
+                    "seed": int(seed),
+                    "exp_name": exp_name,
+                    "backbone_id": resolved_backbone_id,
+                    "input_view_id": data.input_view_id,
+                    "task_groups": [list(group) for group in data.task_groups],
+                    "data_role": data_role,
+                    "learning_rate": float(resolved_hyperparameters["learning_rate"]),
+                    "summary_file": str(artifacts.summary_path.resolve()),
+                },
+                checkpoint_path,
+            )
         if matched_joint_summary is not None:
-            values = fill_intransigence(artifacts.summary_path, matched_joint_summary)
+            values = fill_intransigence(
+                artifacts.summary_path, matched_joint_summary
+            )
             log.info(
                 "intransigence_joint=%s values=%s",
                 matched_joint_summary,
                 values,
             )
+        return artifacts.summary_path
+
+
+def _model_only_storage(model: torch.nn.Module) -> dict[str, Any]:
+    parameter_bytes = sum(
+        parameter.numel() * parameter.element_size()
+        for parameter in model.parameters()
+    )
+    buffer_bytes = sum(
+        buffer.numel() * buffer.element_size()
+        for buffer in model.buffers()
+    )
+    total = int(parameter_bytes + buffer_bytes)
+    return {
+        "model_parameter_bytes": int(parameter_bytes),
+        "replay_sample_bytes": 0,
+        "replay_label_bytes": 0,
+        "auxiliary_bytes": int(buffer_bytes),
+        "total_bytes": total,
+        "total_mib": float(total / (2**20)),
+        "pulse_encoding": "NA",
+        "label_encoding": "NA",
+    }
+
+
+def evaluate_joint_checkpoint(
+    *,
+    dataset_root: Path,
+    result_root: Path,
+    dataset_name: str,
+    order_id: int,
+    seed: int,
+    device: torch.device,
+    checkpoint_path: Path,
+    exp_name: str,
+    source_method: str,
+    overwrite: bool = False,
+    resume: bool = True,
+) -> Path:
+    """Evaluate one selected search checkpoint as the joint reference.
+
+    The checkpoint retains the complete source StrategyBundle for reproducibility,
+    while joint evaluation loads only its separately detached weight-only model.
+    """
+
+    if source_method == "joint" or source_method not in METHODS:
+        raise ValueError(f"Invalid joint checkpoint source method: {source_method}")
+    set_determinism(seed)
+    data = build_dataset_bundle(
+        dataset_root, DATASETS[dataset_name], order_id, data_role="formal"
+    )
+    checkpoint_path = Path(checkpoint_path).resolve()
+    payload = load_weight_checkpoint(checkpoint_path)
+    metadata = payload["metadata"]
+    expected = {
+        "dataset": dataset_name,
+        "method": source_method,
+        "order_id": int(order_id),
+        "seed": SEARCH_SEED,
+        "exp_name": exp_name,
+        "backbone_id": metadata.get("backbone_id"),
+        "input_view_id": data.input_view_id,
+        "task_groups": [list(group) for group in data.task_groups],
+        "data_role": "search",
+    }
+    mismatches = {
+        key: (metadata.get(key), value)
+        for key, value in expected.items()
+        if metadata.get(key) != value
+    }
+    if not isinstance(metadata.get("backbone_id"), str):
+        mismatches["backbone_id"] = (metadata.get("backbone_id"), "registered ID")
+    if mismatches:
+        raise ValueError(f"Joint checkpoint identity mismatch: {mismatches}")
+
+    source_summary_path = Path(metadata.get("summary_file", ""))
+    if not source_summary_path.is_file():
+        raise FileNotFoundError(f"Missing checkpoint source summary: {source_summary_path}")
+    source_summary = json.loads(source_summary_path.read_text(encoding="utf-8"))
+    validate_summary(source_summary, allow_pending_intransigence=True)
+    source_stem = source_summary_path.name.removesuffix("__summary.json")
+    source_config_path = source_summary_path.parent.parent / f"{source_stem}__config.json"
+    if not source_config_path.is_file():
+        raise FileNotFoundError(f"Missing checkpoint source config: {source_config_path}")
+    source_config = json.loads(source_config_path.read_text(encoding="utf-8"))
+    if source_config.get("exp_name") != exp_name:
+        raise ValueError(
+            f"Checkpoint experiment differs: {source_config.get('exp_name')!r} != {exp_name!r}"
+        )
+    if source_config.get("backbone", {}).get("backbone_id") != metadata["backbone_id"]:
+        raise ValueError("Checkpoint metadata and source config use different backbones")
+
+    config = deepcopy(source_config)
+    config.update(
+        method="joint",
+        method_parameters=dict(METHODS["joint"]),
+        exp_name=exp_name,
+        data_role="formal_joint_checkpoint_evaluation",
+        checkpoint_evaluation={
+            "checkpoint_file": str(checkpoint_path),
+            "source_method": source_method,
+            "source_search_seed": int(metadata["seed"]),
+            "source_summary_file": str(source_summary_path.resolve()),
+            "strategy_saved_in_checkpoint": True,
+            "evaluation_uses_weight_only_model": True,
+            "method_class_statistics_loaded": False,
+            "formal_retraining_performed": False,
+        },
+        intransigence={
+            "automatic_fill_enabled": False,
+            "joint_summary_path": None,
+            "pending_results_are_formal_aggregation_eligible": True,
+        },
+    )
+    config["summary_null_reasons"]["cil_performance.intransigence"] = (
+        "Joint reference does not define intransigence against itself."
+    )
+
+    completed = None
+    if resume and not overwrite:
+        completed = completed_summary_path(
+            result_root,
+            dataset_name,
+            "joint",
+            order_id,
+            seed,
+            exp_name,
+            expected_config=config,
+        )
+    if completed is not None:
+        return completed
+
+    model = payload["model"].to(device)
+    model.eval()
+    eval_batch_size = int(
+        source_config["final_hyperparameters"]["resolved"]["eval_mb_size"]
+    )
+    num_workers = int(
+        source_config["final_hyperparameters"]["resolved"]["num_workers"]
+    )
+    task_accuracies = [
+        _evaluate_experience(model, experience, device, eval_batch_size, num_workers)
+        for experience in data.benchmark.test_stream
+    ]
+    matrix = np.full((data.tasks, data.tasks), np.nan, dtype=np.float64)
+    for row in range(data.tasks):
+        matrix[row, : row + 1] = task_accuracies[: row + 1]
+    latency = _measure_latency(
+        model,
+        list(data.benchmark.test_stream),
+        device,
+        eval_batch_size,
+        num_workers,
+    )
+    cil = compute_cil_metrics(matrix, data.test_samples_per_task)
+    summary = {
+        "exp_name": exp_name,
+        "method": METHODS["joint"]["display_name"],
+        "seed": int(seed),
+        "tasks": int(data.tasks),
+        "cil_performance": cil,
+        "network": deepcopy(source_summary["network"]),
+        "training_runtime": deepcopy(source_summary["training_runtime"]),
+        "training_operations": deepcopy(source_summary["training_operations"]),
+        "persistent_storage": _model_only_storage(model),
+        "inference": {"final_latency_ms_per_sample": float(latency)},
+        "working_memory_diagnostic": {
+            "native_peak_allocated_gpu_memory_mib": None,
+            "note": "Checkpoint test only; no training-memory measurement was performed.",
+        },
+    }
+    validate_summary(summary, allow_pending_intransigence=True)
+    accuracy_matrix = {
+        "dataset": dataset_name,
+        "method": "joint",
+        "backbone_id": metadata["backbone_id"],
+        "input_view_id": data.input_view_id,
+        "order_id": int(order_id),
+        "seed": int(seed),
+        "exp_name": exp_name,
+        "data_role": "formal_joint_checkpoint_evaluation",
+        "tasks": int(data.tasks),
+        "orientation": "one fixed best search checkpoint; one row lists test accuracy by task",
+        "test_samples_per_task": [int(value) for value in data.test_samples_per_task],
+        "accuracy_by_task": [float(value) for value in task_accuracies],
+        "checkpoint_source_method": source_method,
+        "checkpoint_source_seed": int(metadata["seed"]),
+    }
+    with AtomicRunArtifacts(
+        result_root,
+        dataset_name,
+        "joint",
+        order_id,
+        seed,
+        config,
+        overwrite,
+    ) as artifacts:
+        log = artifacts.logger
+        log.info("joint_checkpoint=%s", checkpoint_path)
+        log.info("source_method=%s source_seed=%s", source_method, metadata["seed"])
+        log.info("formal_training_performed=false strategy_or_class_statistics_used=false")
+        log.info("accuracy_by_task=%s", task_accuracies)
+        artifacts.commit(summary, accuracy_matrix)
         return artifacts.summary_path

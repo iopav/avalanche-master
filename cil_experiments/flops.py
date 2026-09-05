@@ -538,11 +538,11 @@ def summarize_learning_flops(
         recorded_training_total += int(result.total_flops)
     unexpected = set(phase_totals) - set(CORE_TRAINING_PHASES) - set(LEARNING_AUXILIARY_PHASES)
     if unexpected:
-        raise AssertionError(f"Training results contain non-learning FLOP phases: {sorted(unexpected)}")
+        raise ValueError(f"Training results contain non-learning FLOP phases: {sorted(unexpected)}")
     core = int(sum(phase_totals[phase] for phase in CORE_TRAINING_PHASES))
     auxiliary = int(sum(phase_totals[phase] for phase in LEARNING_AUXILIARY_PHASES))
     if core + auxiliary != recorded_training_total:
-        raise AssertionError(
+        raise ValueError(
             "Core/auxiliary phase sum differs from recorded cumulative training FLOPs: "
             f"{core} + {auxiliary} != {recorded_training_total}"
         )

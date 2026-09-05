@@ -1,16 +1,5 @@
-# Joint references and Intransigence
+# 待删除的旧 Joint 实现
 
-For each formal CIL run, create the matching cumulative Joint reference first. The matching identity is the literal dataset, order, seed, paired method, backbone ID, task groups, input view and training-parameter object; no hash is used.
+本目录不在 PP2 活动调用链中，并且仍依赖已经删除的整数 experiment ID 接口，不能作为当前实验入口。当前 joint reference 由普通方法在 seed 62 的 LR search 最佳完整 checkpoint 产生：`cil_experiments.runner.evaluate_joint_checkpoint()` 加载 checkpoint 后只取 `bundle.strategy.model` 测试，不重新训练。实际入口为普通方法脚本的 `--stage joint`，或 `main_exp/joint_learning.py`。
 
-```powershell
-D:\anaconda3\envs\py310\python.exe -m jointlearning.run --dataset uwave --paired-method er_ace --order-id 1 --seed 62 --device cuda
-D:\anaconda3\envs\py310\python.exe run_uwave.py --methods er_ace --order-ids 1 --seeds 62 --device cuda
-```
-
-The CIL runner requires exactly one matching Joint artifact and fills `cil_performance.intransigence` after training. `--skip-intransigence` permits a diagnostic run with `intransigence=null`; aggregation rejects it. Migrated ResNet18 hyperparameters must be revalidated and locked in `cil_experiments/final_hyperparameters.py` before either command is a formal run. TagFex now uses its source-structure image network and must be revalidated as well. Joint and its paired CIL run must select the same one of `resnet18_cifar_small`, `resnet18_cifar`, and `resnet18_cifar_large`.
-
-After all requested order/seed combinations exist, generate the strict aggregate:
-
-```powershell
-D:\anaconda3\envs\py310\python.exe aggregate_formal_results.py --result-root result --output-prefix result/formal_aggregate
-```
+本目录按用户要求暂不删除，后续确认后可整体移除。
