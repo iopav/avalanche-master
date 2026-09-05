@@ -1,100 +1,87 @@
-# PP2 单个主实验完整流程
+# 一个 PP2 主实验的完整调用流程
 
-本文说明一次普通方法主实验从哪里启动、依次调用哪些文件和函数、每个文件负责什么，以及搜索 checkpoint、joint reference、正式训练和聚合之间的数据关系。以下以 `main_exp/ewc.py` 为例，其他方法只替换入口脚本和方法名。
+本文以 `python main_exp/spike.py --stage all` 为例，说明入口、文件、函数和 artifact 之间的实际调用关系。Texture 和 UWave 只更换数据集入口、任务数量与输入文件，六种方法的编排方式相同。
 
-## 1. 入口参数与启动命令
+## 1. 数据集入口与并行方法进程
 
-入口位于 `main_exp/ewc.py`。实验前只需要修改文件顶部的 `EXP_NAME`、`GPU` 和 `BACKBONE`：`EXP_NAME` 是普通字符串，同时决定 `search_result_<EXP_NAME>`、`result_<EXP_NAME>` 和 `joint_result/<EXP_NAME>` 三组目录；`GPU="0"` 使用第一张可见显卡，`GPU="cpu"` 使用 CPU；正式 backbone 通常写 `resnet18_cifar`，最小流程检查可写 `temporal`。入口最后调用 `cil_experiments.pipeline.run_method_pipeline(method="ewc", ...)`，自身不包含训练、搜索或聚合实现。
+`main_exp/spike.py` 只保存本次实验的四类参数：`EXP_NAME`、`BACKBONE`、`LOSS_SELECTION` 和 `METHOD_GPUS`。脚本调用 `cil_experiments.pipeline.run_dataset_pipeline()`；该函数解析 `--stage` 和 `--dataset-root`，建立 `search_result_<EXP_NAME>` 与 `joint_result_<EXP_NAME>` 两个根路径，然后通过 `ProcessPoolExecutor` 为六个方法分别启动一个进程。每个子进程先设置自己的 `CUDA_VISIBLE_DEVICES`，随后才导入 PyTorch，避免父进程提前固定 CUDA 设备。
 
-```powershell
-# 先生成固定的 search train / validation 文件
-python main_exp/prepare_validation_splits.py
-
-# 完整执行：LR 搜索 -> joint 测试 -> 正式训练 -> 聚合
-python main_exp/ewc.py --stage all
-
-# 也可以分阶段执行，后续阶段会读取前一阶段的落盘结果
-python main_exp/ewc.py --stage search
-python main_exp/ewc.py --stage joint
-python main_exp/ewc.py --stage formal
-python main_exp/ewc.py --stage aggregate
-```
-
-`--datasets uwave texture spike` 控制运行的数据集；聚合阶段要求三个注册数据集齐全。`--dataset-root <目录>` 可替换默认的 `avalanche-master/dataset`。`--skip-intransigence` 只用于暂时跳过正式结果中的 intransigence 填充，不能产生完整发布结果。
-
-## 2. 总调用链
+在 `--stage all` 下，每个方法子进程内部执行：
 
 ```text
-main_exp/ewc.py
-  -> cil_experiments.pipeline.run_method_pipeline()
-       -> lr_search.run_search()
-            -> runner.run_experiment(data_role="search") × 每个 order × 3 个 LR
-                 -> data.build_dataset_bundle(search)
-                 -> strategies.build_strategy()
-                 -> runner._train_experience()
-                 -> runner._evaluate_experience()
-                 -> checkpointing.save_search_checkpoint()
-            -> 选择 validation accuracy 最好的 LR 和完整 checkpoint
-       -> runner.evaluate_joint_checkpoint() × 每个 order × joint seeds
-            -> 只取 checkpoint 中独立保存的 weight_only_model
-            -> data.build_dataset_bundle(formal) 只用于 test stream
-            -> 输出 accuracy_by_task 一行
-       -> runner.run_experiment(data_role="formal") × 每个 order × formal seeds
-            -> 从头构造模型并用完整 train stream 训练
-            -> 在 test stream 上形成真正的下三角 accuracy matrix
-            -> intransigence.fill_intransigence()
-                 -> joint accuracy_by_task - CIL matrix diagonal
-       -> aggregate_results 写方法报告、正式汇总和 joint 测试报告
+lr_search.run_method_search(method)
+  -> 当前方法的 15 个 order-seed 搜索单元
+joint_learning.run_method_joint(method)
+  -> 当前方法的 15 个从头 joint 训练
 ```
 
-## 3. LR 搜索阶段
+因此先完成 15 个搜索单元的方法会直接进入 joint，其他方法仍可继续搜索。主进程等六个 future 全部成功后，调用 `aggregate_results.write_dataset_reports()`。任一子进程抛错时不会发布部分 CSV。
 
-`cil_experiments/pipeline.py` 的 `run_method_pipeline()` 先确定项目目录、数据目录和三个结果根目录，再按 `order_seed_registry.ORDERS_BY_DATASET[dataset]` 遍历 order。它调用 `cil_experiments/lr_search.py` 的 `run_search()`；后者读取固定的三个候选学习率和 seed 62，为每个 order、每个候选构造方法参数，然后调用统一训练入口 `runner.run_experiment(data_role="search")`。因此 search 与 formal 没有两套训练循环，区别只在数据角色、epoch 配置、输出目录以及 search 是否保存 checkpoint。
+## 2. 一个 order-seed 搜索单元
 
-`runner.run_experiment()` 是一次有训练过程的实验总控函数。它校验方法/backbone，调用 `data.build_dataset_bundle()` 选择数据，调用 `strategies.build_strategy()` 创建模型、优化器、Avalanche strategy 和方法插件，然后按 experience 调用 `_train_experience()`。`_train_experience()` 只负责一个 experience 的实际学习：普通 CIL 方法训练当前 experience；joint 不在这里训练。每个阶段训练结束后，`_evaluate_experience()` 对已经可见的测试或验证任务逐项计算 accuracy，由此形成下三角矩阵。相同入口还收集分阶段 FLOPs、持久化存储、运行时间和日志，并通过 `output.AtomicRunArtifacts` 原子写出 config、summary 和 accuracy matrix。
+`lr_search.run_method_search()` 按 `order_seed_registry.ORDERS_BY_DATASET[dataset]` 和 `SEEDS=(62,63,64,65,66)` 遍历，并调用 `run_search_unit()`。后者对应一个固定的 dataset、method、order 和 seed，由 `search_schema.new_order_seed_search()` 构造状态 JSON，读取 `final_hyperparameters.get_final_hyperparameters()` 得到正式参数，再对 `search_config.LR_CANDIDATES` 中三个 LR 逐个运行。完成状态由 `search_schema.validate_order_seed_search()` 检查。
 
-搜索使用 `X_train_search.npy/Y_train_search.npy` 学习，使用 `X_validation.npy/Y_validation.npy` 评估，不读取 test。每个候选会保存完整 `StrategyBundle`，便于复现或恢复，同时保存一个从 strategy 脱离的 `weight_only_model`。对于 iCaRL 和 FeCAM 的 `TrainEvalModel`，这个独立模型只复制 feature extractor 与可训练 classifier，明确不复制 eval classifier 中的 class mean/covariance；其他方法也会清除 class mean、covariance、CWR 临时统计等方法状态。标准网络 buffer（例如 BatchNorm running statistics）属于网络推理状态并保留，否则 ResNet 的 eval 行为会失真。`lr_search.finalize_search()` 按 validation 指标选择每个 order 的最佳 LR，把对应完整 checkpoint 提升为稳定的 best checkpoint，并删除未选候选 checkpoint；一个 order 的 search FLOPs 是三个候选训练 FLOPs之和，search memory 指标是最终保留模型的 parameter bytes。
-
-## 4. Joint reference 阶段
-
-这里的 joint 表示“固定最佳搜索模型在测试集上的一次整体参考评估”，不执行 joint training，也不从头训练。`pipeline.run_method_pipeline()` 从 search JSON 找到当前 order 的 best checkpoint，对 joint seed 列表调用 `runner.evaluate_joint_checkpoint()`。checkpoint 内仍完整保存原 strategy，但该函数不会取得 `bundle.strategy`、optimizer、plugin、replay buffer、class mean 或 covariance；它只取得保存时已经分离的 `weight_only_model`，在正式数据角色的 test stream 上逐任务评估。
-
-joint artifact 虽因兼容现有文件定位仍命名为 `__accuracy-matrix.json`，内容的核心字段只有一行 `accuracy_by_task`，例如 `[0.81, 0.76, 0.69]`，依次表示同一个固定模型在当前 order 三个测试 experience 上的准确率。它不是训练轨迹，不能复制成三角矩阵。seed 只控制测试 DataLoader 和运行确定性；模型权重始终来自 seed 62 的最佳 search checkpoint，因此不同 seed 的结果理论上应相同，只有底层非确定性等因素可能造成细微差别。
-
-## 5. 正式训练与 intransigence
-
-正式阶段仍调用 `runner.run_experiment(data_role="formal")`，但会重新构造 backbone、strategy 和 optimizer，从随机初始化开始训练，不加载 search checkpoint。它只读取 search 选出的 LR，并用数据集完整 train 文件学习、test 文件评估。第 t 个 experience 学完后评估第 1..t 个测试 experience，所以正式方法 artifact 中的 `accuracy_matrix_lower_triangular[t][k]` 具有明确的阶段含义；`task_end_seen_accuracy_curve[t]` 是该行按各任务测试样本数加权后的 seen-task 总准确率，因此通常不等于行内某一个单元格。
-
-`runner.run_experiment()` 在写出正式 summary 后查找同 dataset、order、seed、backbone、input view 和 task groups 的 joint summary，然后调用 `intransigence.fill_intransigence()`。第 k 项使用下面的公式，reference 直接来自 joint 的一行结果，不读取任何伪造 joint 矩阵：
+每个候选调用：
 
 ```text
-intransigence[k] = joint_accuracy_by_task[k] - cil_accuracy_matrix[k][k]
+runner.run_experiment(data_role="formal", loss_selection=...)
+  -> data.build_dataset_bundle(..., data_role="formal")
+  -> strategies.build_strategy(method, ...)
+  -> 对 train_stream 中每个 experience：
+       runner._train_experience()
+         -> strategy.train(experience)
+         -> PhaseFlopProfiler 记录本 experience 学习 FLOPs
+       runner._evaluate_experience()
+         -> 评估当前已见 test experiences
+  -> metrics.compute_cil_metrics()
+  -> storage.compute_persistent_storage()
+  -> checkpointing.save_search_checkpoint()
+  -> output.AtomicRunArtifacts.commit()
 ```
 
-这里比较的是 CIL 方法刚学完任务 k 时对任务 k 的准确率与固定 joint 模型对同一测试任务的准确率。若 joint seed 仍有一个无法与正式四个 seed 配对，当前代码可以保存该结果，但正式 paired intransigence 与聚合只消费具有同 seed 的 reference；多出的 seed 不能替代缺失配对，也不应混入四 seed 平均值。
+`run_experiment()` 管理一次完整 CIL 运行，包括数据、策略、全部 experience、accuracy matrix、指标和 artifact。`_train_experience()` 的范围更小，只负责调用一次 `strategy.train(experience)` 并测量该 experience 的 FLOPs、墙钟时间、GPU event 时间和峰值显存。两者不能互换：搜索必须调用 `run_experiment()` 才会形成完整矩阵和 summary，`run_experiment()` 内部再复用 `_train_experience()`，不存在搜索专用的第二套训练循环。
 
-## 6. 文件职责索引
+每个候选输出 log、summary 和 accuracy matrix。独立 config 文件在提交后删除，因为相同完整配置已嵌入 summary 的 `config` 字段。完整 StrategyBundle 暂存在 order 目录的 `checkpoint_candidates`，用于候选级恢复；三个候选全部完成并选出最佳者后，最佳文件原子复制到 `checkpoint/`，三个临时文件删除，空的临时目录也删除。
 
-- `main_exp/*.py`：七个薄入口，只声明实验名、GPU、backbone 和方法。
-- `main_exp/prepare_validation_splits.py`：调用固定验证拆分准备逻辑，生成 search train 与 validation NPY。
-- `cil_experiments/pipeline.py`：阶段编排、目录选择、order/seed 遍历、失败记录及聚合触发。
-- `cil_experiments/lr_search.py`：三个 LR 候选、候选记录、最佳 LR/checkpoint 选择、search FLOPs 与 parameter bytes 汇总。
-- `cil_experiments/runner.py`：统一的单次训练入口、experience 训练/评估、joint 权重测试、summary 与 artifact 生成。
-- `cil_experiments/checkpointing.py`：原子保存完整 search strategy，并额外构造不含方法统计量的 joint 推理模型；负责最佳 checkpoint 原子提升。
-- `cil_experiments/data.py`：按 `data_role` 选择 search train/validation 或完整 train/test，并建立 Avalanche benchmark。
-- `cil_experiments/strategies.py`：根据方法注册配置构造模型、优化器、criterion、Avalanche strategy 和插件。
-- `cil_experiments/models.py`：唯一 backbone 注册表及 `resnet18_cifar`、`temporal` 实现。
-- `cil_experiments/registry.py`：数据集、方法和训练默认值注册；不保存重复 backbone 表。
-- `cil_experiments/order_seed_registry.py`：各数据集 order、search seed 与 formal/joint seed 列表。
-- `cil_experiments/final_hyperparameters.py`：正式 epoch、batch size 和方法参数的锁定值。
-- `cil_experiments/metrics.py`：由真实 CIL accuracy matrix 计算 ACC、forgetting、BWT 等，并校验 summary 完整性。
-- `cil_experiments/intransigence.py`：校验 CIL/joint 身份匹配，用 joint 单行结果和 CIL 对角线填充 intransigence。
-- `cil_experiments/flops.py`、`storage.py`：训练/推理 FLOPs 分项和持久化存储统计。
-- `cil_experiments/output.py`：统一路径、日志和 config/summary/matrix 的原子提交。
-- `cil_experiments/aggregate_results.py`：读取已完成 artifact，输出 search、formal、joint 的 JSON/CSV 报告。
+## 3. Loss 选择与 search JSON
 
-方法级 `train_report` 和 `test_report` 是原始取数表，每个 dataset/order/seed 一行，不计算 mean、CI95 或 std；其中所有 list 指标序列化为一个 JSON 字符串单元格，intransigence 不再按 task 拆成多列。`joint_test_report` 同样逐 seed 保存原始指标。独立的 `formal_aggregate` 仍承担正式统计汇总；search report 则遵循每个 order 原始值加一行 `all orders` 跨 order 统计的专用格式。
+`runner._LastEpochLossTracker` 在最后一个 CIL task 的训练 strategy 上接收 Avalanche callback，以 mini-batch 样本数对 `strategy.loss` 加权。普通方法的 `last_epoch_train_mean` 直接使用最后 epoch 累计值。FeCAM 后续 task 没有 SGD epoch，`runner._selection_experiences()` 会要求在最终 FeCAM 推理路径上对最后 task 的完整训练样本重算交叉熵。`full_train_final_model` 则对全部 train experiences 重算。重算调用 `_mean_cross_entropy()`，只影响选择 loss；对应 forward FLOPs独立写入 `selection.loss_eval_flops`。
 
-## 7. 结果目录与排错顺序
+`run_search_unit()` 从三个 summary 读取 `selection.loss`，按最小值选择，平局保持 LR candidates 原顺序。它把三个候选的 `overall_learning_flops` 相加为 `total_search_flops`，把最佳 summary 中的 `model_parameter_bytes` 写为 `storage_bytes`。最终的 `orderN_seedSSS_search.json` 同时保存三个候选记录和最佳 artifact 路径。最佳候选的 summary/matrix 不移动、不复制，仍位于对应 LR 目录，它们就是最终 CIL 结果。
 
-`search_result_<EXP_NAME>/<dataset>/<method>/order-XX/lr-X/` 保存候选 log/config/summary/matrix，不建立 checkpoint 子目录；候选模型暂存在方法级 `checkpoint_candidates/`，选择结束后清理。最佳完整 checkpoint 位于稳定的 `checkpoint/` 目录，文件名包含 `__lr-<无小数点LR>__best.pt`，例如 `0.1` 编码为 `01`、`0.01` 编码为 `001`、`0.05` 编码为 `005`；`joint_result/<EXP_NAME>/<dataset>/joint/` 保存各 seed 的单行测试 reference；`result_<EXP_NAME>/<dataset>/<method>/` 保存正式四 seed 结果及填充后的 intransigence；聚合结果写入正式结果根目录的 `aggregate_results/`。发生错误时先读对应 `errors/` JSON 的 `failed_stage` 和 traceback，再核对同次运行的 config；不要手工拼接不同 exp name、order、seed 或 backbone 的 joint reference，身份校验会拒绝这种组合。
+每个候选都启用最终推理时延测量。最后一个 task 学习结束后，本来就要遍历全部已见 test experiences 以填写 accuracy matrix 最后一行；该轮测试会在每个 `model(x)` 前后同步设备并累计前向耗时，不再额外遍历一次 test stream，也不单独执行预热。最后用模型前向总耗时除以该轮测试总样本数，得到 `final_latency_ms_per_sample`。它仍是按 `eval_mb_size` 批量推理折算到单样本的时延；只有 `single_sample_forward_flops` 使用 batch size 1 的单样本输入。
+
+## 4. 一个 joint-run
+
+`joint_learning.run_method_joint()` 同样遍历 3 orders × 5 seeds，并调用 `run_joint_unit()`。该函数只打开对应 `orderN_seedSSS_search.json` 获取 `best_lr` 和核对身份，不打开 `best_checkpoint`。在第 k 个阶段，它按当前 order 取 task 1..k 的累计训练数据，并从头建立一个只覆盖已见类别的 `JointClassifier`；每个阶段的模型、优化器和 shuffle DataLoader 都独立创建。这样第 k 阶段不会看到未来 task 的训练样本或未来类别输出。
+
+Joint 从配对方法的 `final_hyperparameters.py` 读取 optimizer、batch size、momentum、weight decay、foreach、num_workers 和 `epochs_per_experience`。这里只借用通用训练超参数；不会调用 `strategies.build_strategy()`，所以不存在 EWC penalty、ER-ACE replay、iCaRL exemplar、FeCAM mean/covariance、TagFex 双分支或 CWR 临时权重。TagFex 对应的 joint 也是普通单 ResNet18 与线性头。
+
+每个阶段训练结束后，joint 只评估截至该阶段已经出现的 test experiences，形成 `accuracy_matrix_lower_triangular`。`accuracy_by_task` 是该矩阵对角线的冗余副本；此外还记录各阶段最终 epoch loss、累计训练样本数、全部阶段训练 FLOPs 与 runtime，以及最后阶段模型的 storage、latency 和工作内存。全部字段写入一个 `joint_<dataset>_<method>__order-N__seed-SSS.json`。
+
+## 5. Intransigence 回填
+
+Joint JSON 成功落盘后，`intransigence.fill_from_joint_run()` 同时读取 search JSON、最佳 CIL summary、最佳 CIL accuracy matrix 和 joint JSON。它核对 exp name、dataset、method、order、seed、backbone 与 best LR，然后取下三角矩阵对角线：
+
+```python
+intransigence[k] = joint_matrix[k][k] - cil_matrix[k][k]
+```
+
+列表及其算术平均值写回最佳 CIL summary 原文件。这里使用的是矩阵对角线，不使用 `task_end_seen_accuracy_curve`；后者是第 k 行所有已见任务按测试样本数加权后的准确率，语义不同。
+
+## 6. 恢复行为
+
+候选级恢复依赖同一候选的 summary、matrix 和临时完整 checkpoint 三者齐全。`run_search_unit()` 每完成一个候选就原子更新 search JSON；进程在下一候选中断后，重跑会跳过已完成候选。三个候选结束后，search JSON 标为 `completed`；重跑会核对最佳 checkpoint、summary、matrix 及有效推理时延。Joint 开始前先写 pending JSON，完成后原子替换为 completed JSON；新版 joint schema 为 `pp2-joint-learning-v2`，旧的一次性全数据 joint artifact 会因 schema 不一致而被拒绝。身份不一致意味着 EXP_NAME 被错误复用，应换新实验名，不能强行拼接。
+
+## 7. 两个最终 CSV
+
+`aggregate_results.build_dataset_search_summary()` 遍历六方法、三个 order 和五个 seed，读取每个 search JSON 及最佳 summary，校验 intransigence 已完成，然后把嵌套字段展开成一行。列表保留为 JSON 字符串，因此 `intransigence` 不会随 task 数膨胀成大量列；`intransigence_mean` 保持数值。
+
+`build_dataset_joint_learning()` 读取同样 90 个 joint JSON，把除 `accuracy_by_task` 外的全部原始字段展开，并把 joint 对角线 accuracy 展成 `task_1_acc` 等数值列。两个 builder 都要求行数完整且不做均值、置信区间或标准差计算；写 CSV 前还会核对 90 个路径对应的 dataset、method、order、seed、task groups，检查每个搜索单元的三个候选 summary/matrix、最佳 checkpoint 与推理时延是否齐全，最终由 `write_dataset_reports()` 原子写入：
+
+```text
+search_result_<EXP_NAME>/aggregate_results/<dataset>_search_summary.csv
+joint_result_<EXP_NAME>/aggregate_results/<dataset>_joint_learning.csv
+```
+
+旧 method-level 入口、`result_<EXP_NAME>`、`optimum_lrs.json`、formal aggregate、method train/test report、权重直接测试 joint 和 `tiny_ewc_weight_only_v4` 不属于当前活动调用链。

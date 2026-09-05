@@ -446,7 +446,7 @@ def build_custom_mapping() -> dict[Any, Callable[..., int]]:
 ZERO_FLOP_OPERATIONS = {
     "aten.alias", "aten.as_strided", "aten.cat", "aten.clone", "aten.contiguous",
     "aten.copy_", "aten.detach", "aten.empty", "aten.expand", "aten.fill_",
-    "aten.flatten", "aten.gather", "aten.index", "aten.index_put", "aten.index_put_", "aten.isfinite", "aten.item",
+    "aten.flatten", "aten.flip", "aten.gather", "aten.index", "aten.index_put", "aten.index_put_", "aten.isfinite", "aten.item",
     "aten.lift_fresh", "aten.masked_fill", "aten.masked_fill_", "aten.new_", "aten.ones", "aten.permute",
     "aten.repeat", "aten.reshape", "aten.roll", "aten.scatter", "aten.scatter_", "aten.select", "aten.slice", "aten.slice_backward",
     "aten.split", "aten.squeeze", "aten.stack", "aten.t", "aten.to", "aten.transpose",

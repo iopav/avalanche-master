@@ -1,11 +1,12 @@
-"""Shared settings for the fixed-split learning-rate search."""
+"""Candidate LRs for current PP2 and constants used by legacy split tools."""
 
 from __future__ import annotations
 
 
 LR_CANDIDATES = (0.1, 0.05, 0.01)
-ACC_TOLERANCE = 0.005
-SEARCH_EPOCHS = 3
+
+# The current PP2 search uses complete train/test data. These values remain only
+# because main_exp/prepare_validation_splits.py is retained as a legacy utility.
 VALIDATION_FRACTION = 0.2
 VALIDATION_SPLIT_SEED = 62
 

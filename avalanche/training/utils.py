@@ -448,7 +448,7 @@ class ParamData(object):
                 slice(el) if i != exp_idx else slice(old_shape_len)
                 for i, el in enumerate(new_shape)
             ]
-            self._data[idx] = old_data
+            self._data[tuple(idx)] = old_data
         return self.data
 
     @property

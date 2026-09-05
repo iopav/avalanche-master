@@ -161,7 +161,7 @@ METHODS: dict[str, dict[str, Any]] = {
     },
     "joint": {
         "display_name": "Joint Learning",
-        "source": "Best seed-62 search checkpoint with a detached weight-only model used for formal test",
+        "source": "Legacy registry name; active PP2 joint learning is the from-scratch ordinary classifier in joint_learning.py",
     },
 }
 

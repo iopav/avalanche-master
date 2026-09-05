@@ -25,3 +25,12 @@ pip-wheel-metadata
 **/.DS_Store
 avalanche_lib.egg-info/
 .devcontainer
+
+# PP2 本地运行生成物，不进入代码仓库或超算上传包
+.tmp_flops_smoke/
+dataset_mini/
+cumulative_result/
+search_result_*/
+joint_result_*/
+tests/tiny_run/
+tests/pp2_tiny_run/

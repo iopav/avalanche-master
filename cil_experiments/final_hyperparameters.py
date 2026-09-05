@@ -18,7 +18,11 @@ from typing import Any
 # only as initial candidates. The registry stays unlocked until every
 # dataset-method-backbone setting has been revalidated.
 FINAL_HYPERPARAMETERS_LOCKED = True
-
+EPOCH = 10
+MOMENTUM =0.9
+TRAIN_MB_SIZE = 32
+EVAL_MB_SIZE = 128
+    
 
 def is_final_hyperparameters_locked(method: str) -> bool:
     """Every formal method now uses a migrated, selectable image backbone."""
@@ -30,43 +34,43 @@ def is_final_hyperparameters_locked(method: str) -> bool:
 FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     "spike": {
         "er_ace": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 15,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
-            "optimizer": "SGD", "learning_rate": 0.01, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 50,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
-            "optimizer": "SGD", "learning_rate": 0.15, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 50,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
-            "optimizer": "SGD", "learning_rate": 0.003, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 1,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "tukey": False, "shrinkage": True, "shrink1": 1.0,
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
-            "weight_decay": 5e-4, "foreach": False, "train_mb_size": 8,
-            "eval_mb_size": 8, "num_workers": 0, "epochs_per_experience": 40,
+            "weight_decay": 5e-4, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
-            "trans_cls_factor": 1.0, "transfer_factor": 1.0,
+            "trans_cls_factor": 0.005, "transfer_factor": 1.0,
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
@@ -76,43 +80,47 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "init_milestones": (60, 120, 170),
             "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },
+        
+        
+        
+        
     },
     "texture": {
         "er_ace": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 10,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 45,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 30,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 1,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "tukey": False, "shrinkage": True, "shrink1": 1.0,
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
-            "weight_decay": 5e-4, "foreach": False, "train_mb_size": 8,
-            "eval_mb_size": 8, "num_workers": 0, "epochs_per_experience": 40,
+            "weight_decay": 5e-4, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
             "trans_cls_factor": 0.005, "transfer_factor": 1.0,
@@ -128,40 +136,40 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     },
     "uwave": {
         "er_ace": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 15,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 3,
+            "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
-            "optimizer": "SGD", "learning_rate": 0.01, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 7,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
-            "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 30,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
-            "optimizer": "SGD", "learning_rate": 0.03, "momentum": 0.0,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": 32,
-            "eval_mb_size": 128, "num_workers": 0, "epochs_per_experience": 40,
-            "tukey": False, "shrinkage": True, "shrink1": 0.5,
-            "shrink2": 0.5, "covnorm": True,
+            "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
+            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
+            "tukey": False, "shrinkage": True, "shrink1": 1.0,
+            "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
-            "weight_decay": 5e-4, "foreach": False, "train_mb_size": 8,
-            "eval_mb_size": 8, "num_workers": 0, "epochs_per_experience": 40,
+            "weight_decay": 5e-4, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
             "trans_cls_factor": 0.005, "transfer_factor": 1.0,

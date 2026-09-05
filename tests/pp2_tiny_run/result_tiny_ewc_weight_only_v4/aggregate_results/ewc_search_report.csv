@@ -1,7 +1,0 @@
-method,dataset,order,best_lr,search_flops,search_storage_bytes,search_flops_total,search_flops_mean,search_flops_ci95,search_flops_std,search_storage_mean,search_storage_ci95,search_storage_std
-ewc,spike,order1,0.1,4012082232,24392,,,,,,,
-ewc,spike,all_orders,,,,4012082232,4012082232.0,0.0,0.0,24392.0,0.0,0.0
-ewc,texture,order1,0.1,10384440,24392,,,,,,,
-ewc,texture,all_orders,,,,10384440,10384440.0,0.0,0.0,24392.0,0.0,0.0
-ewc,uwave,order1,0.1,10384440,24392,,,,,,,
-ewc,uwave,all_orders,,,,10384440,10384440.0,0.0,0.0,24392.0,0.0,0.0

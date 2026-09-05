@@ -11,9 +11,10 @@ from typing import Any
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from avalanche.core import SupervisedPlugin
 
 from .data import build_dataset_bundle
-from .checkpointing import load_search_checkpoint, load_weight_checkpoint, save_search_checkpoint
+from .checkpointing import load_search_checkpoint, save_search_checkpoint
 from .flops import (
     PhaseFlopProfiler,
     profile_single_forward,
@@ -93,8 +94,14 @@ def _sync(device: torch.device) -> None:
 
 
 def _evaluate_experience(
-    model, experience, device: torch.device, batch_size: int, num_workers: int
-) -> float:
+    model,
+    experience,
+    device: torch.device,
+    batch_size: int,
+    num_workers: int,
+    *,
+    measure_latency: bool = False,
+) -> float | tuple[float, float, int]:
     loader = DataLoader(
         experience.dataset.eval(),
         batch_size=batch_size,
@@ -106,10 +113,17 @@ def _evaluate_experience(
     model.eval()
     correct = 0
     total = 0
+    inference_elapsed_s = 0.0
     with torch.no_grad():
         for batch in loader:
             x, y = batch[0].to(device), batch[1].to(device)
+            if measure_latency:
+                _sync(device)
+                inference_start = time.perf_counter()
             output = model(x)
+            if measure_latency:
+                _sync(device)
+                inference_elapsed_s += time.perf_counter() - inference_start
             logits = output["logits"] if isinstance(output, dict) else output
             if logits.ndim != 2:
                 raise ValueError(f"Expected 2D logits, received {tuple(logits.shape)}")
@@ -120,53 +134,76 @@ def _evaluate_experience(
         model.train()
     if total == 0:
         raise ValueError("Empty evaluation experience")
-    return correct / total
+    accuracy = correct / total
+    if measure_latency:
+        return accuracy, inference_elapsed_s, total
+    return accuracy
 
 
-def _measure_latency(
-    model, experiences, device: torch.device, batch_size: int, num_workers: int
-) -> float:
+class _LastEpochLossTracker(SupervisedPlugin):
+    def __init__(self):
+        super().__init__()
+        self.loss_sum = 0.0
+        self.samples = 0
+        self.last_epoch_mean: float | None = None
+
+    def before_training_epoch(self, strategy, **kwargs):
+        self.loss_sum = 0.0
+        self.samples = 0
+
+    def after_training_iteration(self, strategy, **kwargs):
+        count = int(len(strategy.mb_y))
+        self.loss_sum += float(strategy.loss.detach().item()) * count
+        self.samples += count
+
+    def after_training_epoch(self, strategy, **kwargs):
+        if self.samples:
+            self.last_epoch_mean = self.loss_sum / self.samples
+
+
+def _mean_cross_entropy(model, experiences, device, batch_size, num_workers) -> tuple[float, int]:
     was_training = model.training
     model.eval()
-    first_batch = next(
-        iter(
-            DataLoader(
-                experiences[0].dataset.eval(),
-                batch_size=min(batch_size, len(experiences[0].dataset)),
-                num_workers=num_workers,
-                pin_memory=device.type == "cuda",
-            )
-        )
-    )
-    warm_x = first_batch[0].to(device)
-    with torch.no_grad():
-        for _ in range(3):
-            model(warm_x)
-    _sync(device)
-    total_samples = 0
-    elapsed = 0.0
-    with torch.no_grad():
-        for exp in experiences:
-            loader = DataLoader(
-                exp.dataset.eval(),
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                pin_memory=device.type == "cuda",
-            )
-            for batch in loader:
-                x = batch[0].to(device)
-                _sync(device)
-                start = time.perf_counter()
-                model(x)
-                _sync(device)
-                elapsed += time.perf_counter() - start
-                total_samples += len(x)
+    loss_sum = 0.0
+    samples = 0
+    profiler = PhaseFlopProfiler()
+    profiler.start()
+    profiler.begin_epoch()
+    try:
+        with torch.no_grad():
+            for experience in experiences:
+                loader = DataLoader(
+                    experience.dataset.eval(), batch_size=batch_size, shuffle=False,
+                    num_workers=num_workers, pin_memory=device.type == "cuda",
+                )
+                for batch in loader:
+                    x, y = batch[0].to(device), batch[1].to(device)
+                    output = model(x)
+                    logits = output["logits"] if isinstance(output, dict) else output
+                    loss_sum += float(torch.nn.functional.cross_entropy(
+                        logits, y, reduction="sum"
+                    ).item())
+                    count = int(y.numel())
+                    samples += count
+                    profiler.add_processed_samples(count)
+        profiler.end_epoch()
+        result = profiler.stop(strict=True)
+    except BaseException:
+        profiler.abort()
+        raise
     if was_training:
         model.train()
-    if total_samples == 0:
-        raise ValueError("No samples for latency measurement")
-    return 1000.0 * elapsed / total_samples
+    if not samples:
+        raise ValueError("Cannot compute selection loss on an empty dataset")
+    return loss_sum / samples, int(result.total_flops)
+
+
+def _selection_experiences(loss_selection, method, train_stream):
+    if loss_selection == "full_train_final_model":
+        return list(train_stream)
+    if loss_selection == "last_epoch_train_mean" and method == "fecam":
+        return [train_stream[len(train_stream) - 1]]
+    return None
 
 
 def _fvcore_crosscheck(model, sample: torch.Tensor) -> dict[str, Any]:
@@ -384,6 +421,10 @@ def run_experiment(
     joint_result_root: Path | None = None,
     measure_latency: bool = True,
     checkpoint_path: Path | None = None,
+    loss_selection: str | None = None,
+    include_dataset_dir: bool = True,
+    artifact_stem: str | None = None,
+    flat_summary: bool = False,
 ) -> Path:
     if dataset_name not in DATASETS:
         raise ValueError(f"Unknown dataset: {dataset_name}")
@@ -391,9 +432,11 @@ def run_experiment(
         raise ValueError(f"Unknown method: {method}")
     if method == "joint":
         raise ValueError(
-            "Joint learning is evaluated from the best seed-62 search checkpoint; "
-            "it is not trained by run_experiment()."
+            "Joint learning is trained by joint_learning.run_joint_unit(), "
+            "not by the CIL run_experiment()."
         )
+    if loss_selection not in {None, "last_epoch_train_mean", "full_train_final_model"}:
+        raise ValueError(f"Unknown loss selection mode: {loss_selection}")
     resolved_overrides = dict(parameter_overrides or {})
     if epochs is not None:
         resolved_overrides["epochs_per_experience"] = int(epochs)
@@ -509,6 +552,9 @@ def run_experiment(
         config,
         overwrite,
         run_subdir,
+        include_dataset_dir,
+        artifact_stem,
+        flat_summary,
     ) as artifacts:
         log = artifacts.logger
         log.info("run=%s dataset=%s method=%s order_id=%d seed=%d epochs=%d device=%s", artifacts.summary_path.stem, dataset_name, method, order_id, seed, epochs, device)
@@ -563,7 +609,12 @@ def run_experiment(
         task_peaks: list[float] = []
         task_flops = []
         terminal_values: list[float] = []
+        final_test_inference_s = 0.0
+        final_test_samples = 0
+        loss_tracker = _LastEpochLossTracker()
         for task_index, experience in enumerate(data.benchmark.train_stream):
+            if task_index == data.tasks - 1 and loss_selection == "last_epoch_train_mean":
+                bundle.strategy.plugins.append(loss_tracker)
             result, wall_s, gpu_ms, peak_mib = _train_experience(
                 bundle, experience, device, num_workers
             )
@@ -575,13 +626,23 @@ def run_experiment(
             task_flops.append(result)
             terminal_values.append(result.terminal_flops_per_sample)
             for test_index in range(task_index + 1):
-                matrix[task_index, test_index] = _evaluate_experience(
+                evaluation = _evaluate_experience(
                     bundle.strategy.model,
                     data.benchmark.test_stream[test_index],
                     device,
                     int(resolved_hyperparameters["eval_mb_size"]),
                     num_workers,
+                    measure_latency=(
+                        measure_latency and task_index == data.tasks - 1
+                    ),
                 )
+                if isinstance(evaluation, tuple):
+                    accuracy, elapsed_s, sample_count = evaluation
+                    final_test_inference_s += elapsed_s
+                    final_test_samples += sample_count
+                else:
+                    accuracy = evaluation
+                matrix[task_index, test_index] = accuracy
             if not np.isfinite(matrix[task_index, : task_index + 1]).all():
                 raise FloatingPointError(f"Non-finite accuracy after task {task_index + 1}")
             log.info(
@@ -599,18 +660,26 @@ def run_experiment(
         sample_x = data.test[0][0].unsqueeze(0).to(device)
         single_forward_flops, single_detail = profile_single_forward(model, sample_x)
         fvcore_check = _fvcore_crosscheck(model, sample_x)
-        latency = (
-            _measure_latency(
-                model,
-                list(data.benchmark.test_stream),
-                device,
-                int(resolved_hyperparameters["eval_mb_size"]),
-                num_workers,
-            )
-            if measure_latency else None
-        )
+        latency = None
+        if measure_latency:
+            if final_test_samples <= 0:
+                raise RuntimeError("Final-task evaluation produced no latency samples")
+            latency = 1000.0 * final_test_inference_s / final_test_samples
         storage = compute_persistent_storage(bundle)
         cil = compute_cil_metrics(matrix, data.test_samples_per_task)
+        selection_loss = None
+        selection_loss_eval_flops = 0
+        if loss_selection is not None:
+            selected_experiences = _selection_experiences(
+                loss_selection, method, data.benchmark.train_stream
+            )
+            if selected_experiences is not None:
+                selection_loss, selection_loss_eval_flops = _mean_cross_entropy(
+                    model, selected_experiences, device,
+                    int(resolved_hyperparameters["eval_mb_size"]), num_workers,
+                )
+            else:
+                selection_loss = loss_tracker.last_epoch_mean
         total_s = float(sum(task_wall))
         incremental = task_wall[1:]
         flop_summary = summarize_learning_flops(
@@ -647,6 +716,12 @@ def run_experiment(
                 "native_peak_allocated_gpu_memory_mib": float(max(task_peaks)) if task_peaks else None,
                 "note": "Transient working memory; excluded from persistent storage.",
             },
+            "selection": {
+                "mode": loss_selection,
+                "loss": selection_loss,
+                "loss_eval_flops": selection_loss_eval_flops,
+            },
+            "config": deepcopy(config),
         }
         validate_summary(summary, allow_pending_intransigence=True)
         log.info("accuracy_matrix=%s", matrix.tolist())
@@ -753,7 +828,7 @@ def evaluate_joint_checkpoint(
         dataset_root, DATASETS[dataset_name], order_id, data_role="formal"
     )
     checkpoint_path = Path(checkpoint_path).resolve()
-    payload = load_weight_checkpoint(checkpoint_path)
+    payload = load_search_checkpoint(checkpoint_path)
     metadata = payload["metadata"]
     expected = {
         "dataset": dataset_name,
@@ -833,7 +908,7 @@ def evaluate_joint_checkpoint(
     if completed is not None:
         return completed
 
-    model = payload["model"].to(device)
+    model = payload["bundle"].strategy.model.to(device)
     model.eval()
     eval_batch_size = int(
         source_config["final_hyperparameters"]["resolved"]["eval_mb_size"]
@@ -841,20 +916,25 @@ def evaluate_joint_checkpoint(
     num_workers = int(
         source_config["final_hyperparameters"]["resolved"]["num_workers"]
     )
-    task_accuracies = [
-        _evaluate_experience(model, experience, device, eval_batch_size, num_workers)
-        for experience in data.benchmark.test_stream
-    ]
+    task_accuracies = []
+    inference_elapsed_s = 0.0
+    inference_samples = 0
+    for experience in data.benchmark.test_stream:
+        accuracy, elapsed_s, sample_count = _evaluate_experience(
+            model,
+            experience,
+            device,
+            eval_batch_size,
+            num_workers,
+            measure_latency=True,
+        )
+        task_accuracies.append(accuracy)
+        inference_elapsed_s += elapsed_s
+        inference_samples += sample_count
     matrix = np.full((data.tasks, data.tasks), np.nan, dtype=np.float64)
     for row in range(data.tasks):
         matrix[row, : row + 1] = task_accuracies[: row + 1]
-    latency = _measure_latency(
-        model,
-        list(data.benchmark.test_stream),
-        device,
-        eval_batch_size,
-        num_workers,
-    )
+    latency = 1000.0 * inference_elapsed_s / inference_samples
     cil = compute_cil_metrics(matrix, data.test_samples_per_task)
     summary = {
         "exp_name": exp_name,
@@ -871,6 +951,8 @@ def evaluate_joint_checkpoint(
             "native_peak_allocated_gpu_memory_mib": None,
             "note": "Checkpoint test only; no training-memory measurement was performed.",
         },
+        "selection": {"mode": None, "loss": None, "loss_eval_flops": 0},
+        "config": deepcopy(config),
     }
     validate_summary(summary, allow_pending_intransigence=True)
     accuracy_matrix = {

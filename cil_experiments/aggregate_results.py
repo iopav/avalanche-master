@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .intransigence import _artifact_paths
+from .joint_learning import joint_run_path, validate_joint_result
+from .lr_search import search_unit_path, validate_search_unit
 from .metrics import validate_summary
 from .order_seed_registry import FORMAL_SEEDS, SEEDS
 from .output import atomic_write_text, completed_summary_path, json_text
@@ -239,6 +241,333 @@ def _flatten_report_values(prefix: str, value: Any) -> dict[str, Any]:
     if isinstance(value, (list, tuple)):
         return {prefix: json.dumps(value, ensure_ascii=False, separators=(",", ":"))}
     return {prefix: "" if value is None else value}
+
+
+SUMMARY_CSV_METRICS = {
+    "average_incremental_accuracy": ("cil_performance", "average_incremental_accuracy"),
+    "final_average_accuracy": ("cil_performance", "final_average_accuracy"),
+    "average_forgetting": ("cil_performance", "average_forgetting"),
+    "mean_final_accuracy_loss": ("cil_performance", "mean_final_accuracy_loss"),
+    "backward_transfer": ("cil_performance", "backward_transfer"),
+    "worst_forgotten_task": ("cil_performance", "worst_forgotten_task"),
+    "forgetting_mean": ("cil_performance", "forgetting_mean"),
+    "forgetting_median": ("cil_performance", "forgetting_median"),
+    "forgetting_std": ("cil_performance", "forgetting_std"),
+    "forgetting_min": ("cil_performance", "forgetting_min"),
+    "forgetting_q25": ("cil_performance", "forgetting_q25"),
+    "forgetting_q75": ("cil_performance", "forgetting_q75"),
+    "forgetting_max": ("cil_performance", "forgetting_max"),
+    "forgetting_positive_fraction": ("cil_performance", "forgetting_positive_fraction"),
+    "task_end_seen_accuracy_curve": ("cil_performance", "task_end_seen_accuracy_curve"),
+    "forgetting_per_task": ("cil_performance", "forgetting_per_task"),
+    "intransigence": ("cil_performance", "intransigence"),
+    "intransigence_mean": ("cil_performance", "intransigence_mean"),
+    "final_hidden_neurons": ("network", "final_hidden_neurons"),
+    "training_runtime_s": ("training_runtime", "total_s"),
+    "training_gpu_ms": ("training_runtime", "total_gpu_ms"),
+    "initial_task_s": ("training_runtime", "initial_task_s"),
+    "incremental_tasks_total_s": ("training_runtime", "incremental_tasks_total_s"),
+    "mean_incremental_task_s": ("training_runtime", "mean_incremental_task_s"),
+    "median_incremental_task_s": ("training_runtime", "median_incremental_task_s"),
+    "terminal_flops_per_sample": ("training_operations", "task_summed_terminal_flops_per_sample"),
+    "overall_learning_flops": ("training_operations", "overall_learning_flops"),
+    "core_training_flops": ("training_operations", "core_training_flops"),
+    "learning_auxiliary_flops": ("training_operations", "learning_auxiliary_flops"),
+    "single_sample_forward_flops": ("training_operations", "single_sample_forward_flops"),
+    "model_parameter_bytes": ("persistent_storage", "model_parameter_bytes"),
+    "replay_sample_bytes": ("persistent_storage", "replay_sample_bytes"),
+    "replay_label_bytes": ("persistent_storage", "replay_label_bytes"),
+    "auxiliary_bytes": ("persistent_storage", "auxiliary_bytes"),
+    "persistent_storage_bytes": ("persistent_storage", "total_bytes"),
+    "persistent_storage_mib": ("persistent_storage", "total_mib"),
+    "inference_latency_ms_per_sample": ("inference", "final_latency_ms_per_sample"),
+    "peak_allocated_gpu_memory_mib": ("working_memory_diagnostic", "native_peak_allocated_gpu_memory_mib"),
+}
+
+
+JOINT_CSV_METRICS = {
+    "final_epoch_train_loss": ("final_epoch_train_loss",),
+    "training_runtime_s": ("training_runtime", "total_s"),
+    "training_gpu_ms": ("training_runtime", "total_gpu_ms"),
+    "terminal_flops_per_sample": ("training_operations", "task_summed_terminal_flops_per_sample"),
+    "overall_learning_flops": ("training_operations", "overall_learning_flops"),
+    "core_training_flops": ("training_operations", "core_training_flops"),
+    "learning_auxiliary_flops": ("training_operations", "learning_auxiliary_flops"),
+    "single_sample_forward_flops": ("training_operations", "single_sample_forward_flops"),
+    "model_parameter_bytes": ("persistent_storage", "model_parameter_bytes"),
+    "model_buffer_bytes": ("persistent_storage", "model_buffer_bytes"),
+    "optimizer_state_bytes": ("persistent_storage", "optimizer_state_bytes"),
+    "persistent_storage_bytes": ("persistent_storage", "total_bytes"),
+    "persistent_storage_mib": ("persistent_storage", "total_mib"),
+    "inference_latency_ms_per_sample": ("inference", "final_latency_ms_per_sample"),
+    "peak_allocated_gpu_memory_mib": ("working_memory_diagnostic", "native_peak_allocated_gpu_memory_mib"),
+}
+
+
+def _selected_metrics(payload: dict[str, Any], fields: dict[str, tuple[str, ...]]) -> dict[str, Any]:
+    selected: dict[str, Any] = {}
+    for name, path in fields.items():
+        value: Any = payload
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(value, (list, tuple)):
+            value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        selected[name] = "" if value is None else value
+    return selected
+
+
+def _identity_differences(
+    payload: dict[str, Any], expected: dict[str, Any]
+) -> dict[str, tuple[Any, Any]]:
+    return {
+        key: (payload.get(key), value)
+        for key, value in expected.items()
+        if payload.get(key) != value
+    }
+
+
+def _validate_candidate_artifacts(
+    search: dict[str, Any], *, dataset: str, method: str, order_id: int, seed: int
+) -> None:
+    expected_matrix = {
+        "dataset": dataset,
+        "method": method,
+        "order_id": int(order_id),
+        "seed": int(seed),
+        "exp_name": search["exp_name"],
+        "backbone_id": search["backbone"],
+    }
+    for learning_rate, record in search["candidates"].items():
+        for key in ("summary_file", "accuracy_matrix_file"):
+            path = Path(record.get(key, ""))
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"Missing {method}/order{order_id}/seed{seed}/lr{learning_rate} {key}: {path}"
+                )
+        summary = json.loads(Path(record["summary_file"]).read_text(encoding="utf-8"))
+        validate_summary(summary, allow_pending_intransigence=True)
+        summary_config = summary["config"]
+        summary_expected = {
+            "exp_name": search["exp_name"],
+            "seed": int(seed),
+        }
+        summary_differences = _identity_differences(summary, summary_expected)
+        nested_differences = {
+            "dataset": (summary_config.get("dataset", {}).get("name"), dataset),
+            "method": (summary_config.get("method"), method),
+            "backbone": (
+                summary_config.get("backbone", {}).get("backbone_id"),
+                search["backbone"],
+            ),
+            "learning_rate": (
+                summary_config.get("final_hyperparameters", {})
+                .get("resolved", {})
+                .get("learning_rate"),
+                float(learning_rate),
+            ),
+        }
+        summary_differences.update(
+            {
+                key: values
+                for key, values in nested_differences.items()
+                if values[0] != values[1]
+            }
+        )
+        if summary_differences:
+            raise ValueError(f"Candidate summary identity mismatch: {summary_differences}")
+        latency = summary.get("inference", {}).get("final_latency_ms_per_sample")
+        if (
+            isinstance(latency, bool)
+            or not isinstance(latency, (int, float))
+            or not math.isfinite(latency)
+            or latency <= 0
+        ):
+            raise ValueError(f"Candidate inference latency is invalid: {record['summary_file']}")
+        matrix = json.loads(
+            Path(record["accuracy_matrix_file"]).read_text(encoding="utf-8")
+        )
+        differences = _identity_differences(matrix, expected_matrix)
+        if differences:
+            raise ValueError(f"Candidate matrix identity mismatch: {differences}")
+    selected = search["candidates"][str(search["best_lr"])]
+    if search["best_summary_file"] != selected["summary_file"]:
+        raise ValueError("Best summary path differs from the selected candidate")
+    if search["best_accuracy_matrix_file"] != selected["accuracy_matrix_file"]:
+        raise ValueError("Best accuracy-matrix path differs from the selected candidate")
+    if not Path(search["best_checkpoint"]).is_file():
+        raise FileNotFoundError(search["best_checkpoint"])
+
+
+def build_dataset_search_summary(
+    search_root: Path,
+    *,
+    dataset: str,
+    methods: tuple[str, ...] = FORMAL_METHODS,
+) -> str:
+    """Return one unaggregated row per method/order/seed search unit."""
+
+    rows: list[dict[str, Any]] = []
+    for method in methods:
+        for order_id in sorted(ORDERS_BY_DATASET[dataset]):
+            for seed in SEEDS:
+                path = search_unit_path(search_root, method, order_id, seed)
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+                search = json.loads(path.read_text(encoding="utf-8"))
+                if search.get("status") != STATUS_COMPLETED:
+                    raise RuntimeError(f"Search is incomplete: {path}")
+                validate_search_unit(search)
+                expected_search = {
+                    "dataset": dataset,
+                    "method": method,
+                    "order": int(order_id),
+                    "seed": int(seed),
+                }
+                differences = _identity_differences(search, expected_search)
+                if differences:
+                    raise ValueError(f"Search path/payload identity mismatch: {differences}")
+                _validate_candidate_artifacts(
+                    search,
+                    dataset=dataset,
+                    method=method,
+                    order_id=order_id,
+                    seed=seed,
+                )
+                summary_path = Path(search["best_summary_file"])
+                if not summary_path.is_file():
+                    raise FileNotFoundError(summary_path)
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                validate_summary(summary)
+                row: dict[str, Any] = {
+                    "exp_name": search["exp_name"],
+                    "method": method,
+                    "dataset": dataset,
+                    "order": int(order_id),
+                    "seed": int(seed),
+                    "backbone": search["backbone"],
+                    "lr_candidates": json.dumps(
+                        search["lr_candidates"], separators=(",", ":")
+                    ),
+                    "loss_selection": search["loss_selection"],
+                    "best_lr": search["best_lr"],
+                    "best_loss": search["best_loss"],
+                    "total_search_flops": search["total_search_flops"],
+                    "storage_bytes": search["storage_bytes"],
+                    "tasks": summary["tasks"],
+                    "selection_loss_eval_flops": summary["selection"]["loss_eval_flops"],
+                }
+                row.update(_selected_metrics(summary, SUMMARY_CSV_METRICS))
+                rows.append(row)
+    expected = len(methods) * len(ORDERS_BY_DATASET[dataset]) * len(SEEDS)
+    if len(rows) != expected:
+        raise RuntimeError(f"Expected {expected} search rows, found {len(rows)}")
+    return _rows_csv(rows)
+
+
+def build_dataset_joint_learning(
+    joint_root: Path,
+    *,
+    dataset: str,
+    methods: tuple[str, ...] = FORMAL_METHODS,
+) -> str:
+    """Return one unaggregated row per from-scratch joint-learning run."""
+
+    task_count = len(next(iter(ORDERS_BY_DATASET[dataset].values())))
+    rows: list[dict[str, Any]] = []
+    for method in methods:
+        for order_id in sorted(ORDERS_BY_DATASET[dataset]):
+            for seed in SEEDS:
+                path = joint_run_path(joint_root, dataset, method, order_id, seed)
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if payload.get("status") != STATUS_COMPLETED:
+                    raise RuntimeError(f"Joint run is incomplete: {path}")
+                validate_joint_result(payload)
+                expected_joint = {
+                    "dataset": dataset,
+                    "method": method,
+                    "order": int(order_id),
+                    "seed": int(seed),
+                }
+                differences = _identity_differences(payload, expected_joint)
+                if differences:
+                    raise ValueError(f"Joint path/payload identity mismatch: {differences}")
+                if payload["task_groups"] != [
+                    list(group) for group in ORDERS_BY_DATASET[dataset][order_id]
+                ]:
+                    raise ValueError(f"Joint task groups differ from the order registry: {path}")
+                source_search_path = Path(payload["config"].get("source_search_json", ""))
+                if not source_search_path.is_file():
+                    raise FileNotFoundError(
+                        f"Joint source search JSON is missing: {source_search_path}"
+                    )
+                source_search = json.loads(
+                    source_search_path.read_text(encoding="utf-8")
+                )
+                validate_search_unit(source_search)
+                source_expected = {
+                    **expected_joint,
+                    "exp_name": payload["exp_name"],
+                    "backbone": payload["backbone"],
+                    "best_lr": payload["best_lr"],
+                }
+                source_differences = _identity_differences(
+                    source_search, source_expected
+                )
+                if source_differences:
+                    raise ValueError(
+                        f"Joint/source-search identity mismatch: {source_differences}"
+                    )
+                accuracy = payload.get("accuracy_by_task")
+                if not isinstance(accuracy, list) or len(accuracy) != task_count:
+                    raise ValueError(f"Joint task accuracy count is invalid: {path}")
+                row: dict[str, Any] = {
+                    "exp_name": payload["exp_name"],
+                    "method": method,
+                    "dataset": dataset,
+                    "order": int(order_id),
+                    "seed": int(seed),
+                    "backbone": payload["backbone"],
+                    "best_lr": payload["best_lr"],
+                    "tasks": payload["tasks"],
+                }
+                row.update(_selected_metrics(payload, JOINT_CSV_METRICS))
+                for index, value in enumerate(accuracy, start=1):
+                    row[f"task_{index}_acc"] = float(value)
+                rows.append(row)
+    expected = len(methods) * len(ORDERS_BY_DATASET[dataset]) * len(SEEDS)
+    if len(rows) != expected:
+        raise RuntimeError(f"Expected {expected} joint rows, found {len(rows)}")
+    return _rows_csv(rows)
+
+
+def write_dataset_reports(
+    search_root: Path,
+    joint_root: Path,
+    *,
+    dataset: str,
+    methods: tuple[str, ...] = FORMAL_METHODS,
+) -> tuple[Path, Path]:
+    search_path = (
+        Path(search_root) / "aggregate_results" / f"{dataset}_search_summary.csv"
+    )
+    joint_path = (
+        Path(joint_root) / "aggregate_results" / f"{dataset}_joint_learning.csv"
+    )
+    atomic_write_text(
+        search_path,
+        build_dataset_search_summary(
+            search_root, dataset=dataset, methods=methods
+        ),
+    )
+    atomic_write_text(
+        joint_path,
+        build_dataset_joint_learning(
+            joint_root, dataset=dataset, methods=methods
+        ),
+    )
+    return search_path, joint_path
 
 
 def _formal_summaries(

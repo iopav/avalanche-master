@@ -1,23 +1,20 @@
-# PyTorch 与数值计算
-torch
-torchvision
-torchmetrics
-numpy
-scikit-learn
-
-# PP2 的 FLOPs、系统资源与求解器统计
-fvcore
-psutil
-gputil
-qpsolvers[open_source_solvers]
-
-# 本地 Avalanche 源码运行依赖
-typing-extensions>=4.6.0
-matplotlib
-pytorchcv
-wandb
-tensorboard>=1.15
-tqdm
-gdown
-dill
-packaging
+# PP2 训练与本地 Avalanche 运行依赖
+torch==2.11.0
+torchvision==0.26.0
+torchmetrics==1.9.0
+numpy==2.2.5
+scikit-learn==1.7.1
+fvcore==0.1.5.post20221221
+psutil==7.2.2
+gputil==1.4.0
+qpsolvers[open_source_solvers]==4.13.0
+dill==0.4.1
+typing-extensions==4.15.0
+packaging==25.0
+matplotlib==3.10.8
+pillow==11.1.0
+pytorchcv==0.0.74
+wandb==0.28.2
+tensorboard==2.21.0
+tqdm==4.70.0
+gdown==6.1.0

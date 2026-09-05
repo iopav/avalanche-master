@@ -56,16 +56,20 @@ def run_artifact_paths(
     order_id: int,
     seed: int,
     run_subdir: Path | str | None = None,
+    include_dataset_dir: bool = True,
+    stem_override: str | None = None,
+    flat_summary: bool = False,
 ) -> RunArtifactPaths:
-    method_root = result_root / dataset / method
+    method_root = result_root / dataset / method if include_dataset_dir else result_root / method
     if run_subdir is not None:
         method_root /= Path(run_subdir)
-    stem = f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
+    stem = stem_override or f"{dataset}__{method}__order-{order_id:02d}__seed-{seed:03d}"
+    summary_root = method_root if flat_summary else method_root / "summary"
     return RunArtifactPaths(
         method_root=method_root,
         log=method_root / "log" / f"{stem}.log",
-        summary=method_root / "summary" / f"{stem}__summary.json",
-        accuracy_matrix=method_root / "summary" / f"{stem}__accuracy-matrix.json",
+        summary=summary_root / f"{stem}__summary.json",
+        accuracy_matrix=summary_root / f"{stem}__accuracy-matrix.json",
         config=method_root / f"{stem}__config.json",
     )
 
@@ -142,9 +146,13 @@ class AtomicRunArtifacts:
         config: dict[str, Any],
         overwrite: bool = False,
         run_subdir: Path | str | None = None,
+        include_dataset_dir: bool = True,
+        stem_override: str | None = None,
+        flat_summary: bool = False,
     ):
         paths = run_artifact_paths(
-            result_root, dataset, method, order_id, seed, run_subdir
+            result_root, dataset, method, order_id, seed, run_subdir,
+            include_dataset_dir, stem_override, flat_summary,
         )
         self.method_root = paths.method_root
         self.log_path = paths.log
@@ -174,6 +182,8 @@ class AtomicRunArtifacts:
         self.logger.propagate = False
         file_handler = logging.FileHandler(self.temp_log, encoding="utf-8")
         stream_handler = logging.StreamHandler(sys.stdout)
+        # 完整诊断写入每个 run 的日志文件；终端只显示警告和错误。
+        stream_handler.setLevel(logging.WARNING)
         formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
         file_handler.setFormatter(formatter)
         stream_handler.setFormatter(formatter)

@@ -18,6 +18,8 @@ SUMMARY_KEYS = {
     "persistent_storage",
     "inference",
     "working_memory_diagnostic",
+    "selection",
+    "config",
 }
 
 CIL_KEYS = {
@@ -38,6 +40,7 @@ CIL_KEYS = {
     "task_end_seen_accuracy_curve",
     "forgetting_per_task",
     "intransigence",
+    "intransigence_mean",
 }
 
 FLOP_KEYS = {
@@ -88,6 +91,7 @@ def compute_cil_metrics(matrix: np.ndarray, test_counts: list[int]) -> dict[str,
         "task_end_seen_accuracy_curve": seen_curve,
         "forgetting_per_task": forgetting,
         "intransigence": None,
+        "intransigence_mean": None,
     }
     return result
 
@@ -191,6 +195,32 @@ def validate_summary(
         )
     ):
         raise ValueError("intransigence must be a finite list with one value per task")
+    if intransigence is None:
+        if cil["intransigence_mean"] is not None:
+            raise ValueError("intransigence_mean must be pending with intransigence")
+    elif not math.isclose(
+        float(cil["intransigence_mean"]), float(np.mean(intransigence)), abs_tol=1e-12
+    ):
+        raise ValueError("intransigence_mean does not match intransigence")
+    selection = summary["selection"]
+    if set(selection) != {"mode", "loss", "loss_eval_flops"}:
+        raise ValueError("selection keys differ")
+    if selection["mode"] not in {None, "last_epoch_train_mean", "full_train_final_model"}:
+        raise ValueError("selection mode is invalid")
+    if selection["mode"] is None:
+        if selection["loss"] is not None or selection["loss_eval_flops"] != 0:
+            raise ValueError("disabled loss selection must not contain results")
+    elif (
+        isinstance(selection["loss"], bool)
+        or not isinstance(selection["loss"], (int, float, np.number))
+        or not np.isfinite(selection["loss"])
+        or isinstance(selection["loss_eval_flops"], bool)
+        or not isinstance(selection["loss_eval_flops"], int)
+        or selection["loss_eval_flops"] < 0
+    ):
+        raise ValueError("loss selection result is invalid")
+    if not isinstance(summary["config"], dict):
+        raise ValueError("summary config must be a mapping")
     if not math.isclose(
         cil["average_incremental_accuracy"],
         float(np.mean(cil["task_end_seen_accuracy_curve"])),

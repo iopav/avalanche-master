@@ -1,6 +1,5 @@
 from typing import Dict
 import numpy as np
-import qpsolvers
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -162,6 +161,8 @@ class GEMPlugin(SupervisedPlugin):
         Taken from original code:
         https://github.com/facebookresearch/GradientEpisodicMemory/blob/master/model/gem.py
         """
+
+        import qpsolvers
 
         memories_np = self.G.cpu().double().numpy()
         gradient_np = g.cpu().contiguous().view(-1).double().numpy()

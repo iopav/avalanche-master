@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .metrics import validate_summary
-from .output import json_text
+from .output import atomic_write_json, json_text
 from .search_config import JOINT_METHOD
 
 
@@ -45,20 +45,25 @@ def compute_intransigence(
     cil_matrix: dict[str, Any], joint_matrix: dict[str, Any]
 ) -> list[float]:
     lower = cil_matrix.get("accuracy_matrix_lower_triangular")
-    reference = joint_matrix.get("accuracy_by_task")
+    reference = joint_matrix.get("accuracy_matrix_lower_triangular")
     tasks = int(cil_matrix.get("tasks", 0))
     if not isinstance(lower, list) or len(lower) != tasks:
         raise ValueError("CIL accuracy matrix task dimension is invalid")
     if not isinstance(reference, list) or len(reference) != tasks:
-        raise ValueError("Joint reference accuracy row task dimension is invalid")
+        raise ValueError("Joint reference accuracy matrix task dimension is invalid")
     values: list[float] = []
     for index in range(tasks):
         row = lower[index]
         if not isinstance(row, list) or len(row) != tasks or row[index] is None:
             raise ValueError(f"Missing CIL diagonal accuracy at task {index + 1}")
-        if reference[index] is None:
-            raise ValueError(f"Missing joint reference accuracy at task {index + 1}")
-        values.append(float(reference[index]) - float(row[index]))
+        joint_row = reference[index]
+        if (
+            not isinstance(joint_row, list)
+            or len(joint_row) != tasks
+            or joint_row[index] is None
+        ):
+            raise ValueError(f"Missing joint diagonal accuracy at task {index + 1}")
+        values.append(float(joint_row[index]) - float(row[index]))
     return values
 
 
@@ -119,6 +124,7 @@ def fill_intransigence(cil_summary_path: Path, joint_summary_path: Path) -> list
         raise ValueError("CIL/joint-learning task counts differ")
     values = compute_intransigence(cil_matrix, joint_matrix)
     cil_summary["cil_performance"]["intransigence"] = values
+    cil_summary["cil_performance"]["intransigence_mean"] = float(sum(values) / len(values))
     validate_summary(cil_summary)
     fd, name = tempfile.mkstemp(
         prefix=f".{cil_summary_path.name}.", suffix=".tmp", dir=cil_summary_path.parent
@@ -133,6 +139,72 @@ def fill_intransigence(cil_summary_path: Path, joint_summary_path: Path) -> list
     except BaseException:
         staged.unlink(missing_ok=True)
         raise
+    return values
+
+
+def fill_from_joint_run(search_json_path: Path, joint_json_path: Path) -> list[float]:
+    """Fill the selected CIL summary from a from-scratch joint run."""
+
+    search = json.loads(Path(search_json_path).read_text(encoding="utf-8"))
+    joint = json.loads(Path(joint_json_path).read_text(encoding="utf-8"))
+    if search.get("status") != "completed" or joint.get("status") != "completed":
+        raise RuntimeError("Search and joint artifacts must both be completed")
+    keys = ("exp_name", "dataset", "method", "order", "seed", "backbone")
+    differences = {
+        key: (search.get(key), joint.get(key))
+        for key in keys
+        if search.get(key) != joint.get(key)
+    }
+    if differences:
+        raise ValueError(f"Search/joint identity mismatch: {differences}")
+    if float(search["best_lr"]) != float(joint["best_lr"]):
+        raise ValueError("Search/joint best learning rates differ")
+
+    summary_path = Path(search["best_summary_file"])
+    matrix_path = Path(search["best_accuracy_matrix_file"])
+    if not summary_path.is_file() or not matrix_path.is_file():
+        raise FileNotFoundError("Selected CIL summary or accuracy matrix is missing")
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    expected_matrix = {
+        "dataset": search["dataset"],
+        "method": search["method"],
+        "order_id": int(search["order"]),
+        "seed": int(search["seed"]),
+        "exp_name": search["exp_name"],
+        "backbone_id": search["backbone"],
+    }
+    matrix_differences = {
+        key: (matrix.get(key), value)
+        for key, value in expected_matrix.items()
+        if matrix.get(key) != value
+    }
+    if matrix_differences:
+        raise ValueError(f"Selected CIL matrix identity mismatch: {matrix_differences}")
+    if summary.get("exp_name") != search["exp_name"] or int(summary.get("seed", -1)) != int(search["seed"]):
+        raise ValueError("Selected CIL summary identity differs from search")
+    accuracy = joint.get("accuracy_by_task")
+    joint_matrix = joint.get("accuracy_matrix_lower_triangular")
+    tasks = int(summary["tasks"])
+    if not isinstance(accuracy, list) or len(accuracy) != tasks:
+        raise ValueError("Joint task accuracy count differs from selected CIL run")
+    if not isinstance(joint_matrix, list) or len(joint_matrix) != tasks:
+        raise ValueError("Joint accuracy matrix count differs from selected CIL run")
+    values = compute_intransigence(
+        matrix, {"accuracy_matrix_lower_triangular": joint_matrix}
+    )
+    summary["cil_performance"]["intransigence"] = values
+    summary["cil_performance"]["intransigence_mean"] = float(sum(values) / len(values))
+    summary["config"]["intransigence"] = {
+        "automatic_fill_enabled": True,
+        "joint_json_path": str(Path(joint_json_path).resolve()),
+        "pending_results_are_formal_aggregation_eligible": False,
+    }
+    summary["config"].get("summary_null_reasons", {}).pop(
+        "cil_performance.intransigence", None
+    )
+    validate_summary(summary)
+    atomic_write_json(summary_path, summary)
     return values
 
 

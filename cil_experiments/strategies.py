@@ -22,6 +22,15 @@ from .replay_storage import (
 )
 
 
+def _silent_evaluator():
+    """Avalanche evaluator required by templates; PP2 records its own metrics."""
+
+    from avalanche.logging.base_logger import BaseLogger
+    from avalanche.training.plugins.evaluation import EvaluationPlugin
+
+    return EvaluationPlugin(loggers=[BaseLogger()])
+
+
 def _phase_context(phase_plugin, phase: str):
     if phase_plugin is None:
         return contextlib.nullcontext()
@@ -586,7 +595,7 @@ def build_si_tuning_strategy(
         train_epochs=epochs,
         eval_mb_size=training_parameters["eval_mb_size"],
         device=device,
-        evaluator=None,
+        evaluator=_silent_evaluator(),
         eval_every=-1,
     )
     method_plugin = next(
@@ -637,7 +646,7 @@ def build_lwf_tuning_strategy(
         train_epochs=epochs,
         eval_mb_size=training_parameters["eval_mb_size"],
         device=device,
-        evaluator=None,
+        evaluator=_silent_evaluator(),
         eval_every=-1,
     )
     method_plugin = next(
@@ -745,7 +754,7 @@ def build_ewc_cosine_tuning_strategy(
         train_epochs=epochs,
         eval_mb_size=training_parameters["eval_mb_size"],
         device=device,
-        evaluator=None,
+        evaluator=_silent_evaluator(),
         eval_every=-1,
     )
     method_plugin = next(
@@ -797,7 +806,7 @@ def build_mas_tuning_strategy(
         train_epochs=epochs,
         eval_mb_size=training_parameters["eval_mb_size"],
         device=device,
-        evaluator=None,
+        evaluator=_silent_evaluator(),
         eval_every=-1,
     )
     method_plugin = next(
@@ -825,7 +834,7 @@ def build_strategy(
         raise ValueError(f"Unknown method {method}")
     if method == "joint":
         raise ValueError(
-            "Joint is tested from a saved search checkpoint and has no trainable strategy"
+            "PP2 joint learning uses joint_learning.JointClassifier, not a CIL strategy"
         )
     resolved_backbone_id = backbone_id or DEFAULT_BACKBONES[method]
     resolved_input_shape = _model_input_shape(dataset_name, model_input_shape)
@@ -851,7 +860,7 @@ def build_strategy(
         train_epochs=epochs,
         eval_mb_size=training_parameters["eval_mb_size"],
         device=device,
-        evaluator=None,
+        evaluator=_silent_evaluator(),
         eval_every=-1,
     )
     if method == "er_ace":

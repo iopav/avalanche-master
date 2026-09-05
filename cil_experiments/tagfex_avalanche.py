@@ -22,6 +22,8 @@ from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 
+from avalanche.logging.base_logger import BaseLogger
+from avalanche.training.plugins.evaluation import EvaluationPlugin
 from avalanche.training.templates import SupervisedTemplate
 from .models import build_feature_map_extractor
 from .replay_storage import Float32ReplayExample, PackedBinaryExample
@@ -429,7 +431,7 @@ class AvalancheTagFex(SupervisedTemplate):
             train_epochs=hparams.init_epochs,
             eval_mb_size=hparams.eval_mb_size,
             device=device,
-            evaluator=None,
+            evaluator=EvaluationPlugin(loggers=[BaseLogger()]),
             eval_every=-1,
             plugins=list(plugins or ()),
         )
