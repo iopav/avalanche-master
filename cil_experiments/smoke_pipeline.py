@@ -25,6 +25,7 @@ SMOKE_LRS = (0.1, 0.01)
 TRAIN_SAMPLES_PER_CLASS = 2
 TEST_SAMPLES_PER_CLASS = 1
 SMOKE_EPOCHS = 1
+SMOKE_MEMORY_SIZE = max(spec.num_classes for spec in DATASETS.values())
 
 
 def _atomic_save(path: Path, array: np.ndarray) -> None:
@@ -132,12 +133,12 @@ def _parameter_overrides(method: str) -> dict[str, Any]:
         "num_workers": 0,
     }
     if method == "er_ace":
-        overrides.update(memory_size=8, batch_size_mem=4)
+        overrides.update(memory_size=SMOKE_MEMORY_SIZE, batch_size_mem=4)
     elif method == "icarl":
-        overrides.update(memory_size=8)
+        overrides.update(memory_size=SMOKE_MEMORY_SIZE)
     elif method == "tagfex":
         overrides.update(
-            memory_size=8,
+            memory_size=SMOKE_MEMORY_SIZE,
             init_epochs=SMOKE_EPOCHS,
             inc_epochs=SMOKE_EPOCHS,
             proj_hidden_dim=64,
