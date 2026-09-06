@@ -34,6 +34,18 @@ DATASET_ROOT="${DATASET_ROOT:-}"
 
 # 每个方法进程使用的CPU线程数，应按本次作业申请的 CPU 核数 ÷ 6
 THREADS_PER_METHOD="${THREADS_PER_METHOD:-1}"
+
+# 正式实验成功后是否复制并上传结果：1=自动发布，0=不发布。
+# 仅 all、joint、aggregate 会发布；search 尚无最终联合结果，因此不发布。
+PUBLISH_RESULTS="${PUBLISH_RESULTS:-1}"
+
+# 私有结果仓库。通常不需要修改；如改用 SSH，可在启动命令中覆盖此变量。
+RESULT_REPO_URL="${RESULT_REPO_URL:-https://github.com/iopav/result-pp2.git}"
+
+# Git 提交身份。已有全局 user.name/user.email 时留空；否则在启动命令中设置，
+# 例如 RESULT_GIT_USER_NAME="Your Name" RESULT_GIT_USER_EMAIL="you@example.com"。
+RESULT_GIT_USER_NAME="${RESULT_GIT_USER_NAME:-}"
+RESULT_GIT_USER_EMAIL="${RESULT_GIT_USER_EMAIL:-}"
 # ======================== 用户参数结束 ========================
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,6 +60,10 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
 fi
 if ! [[ "${THREADS_PER_METHOD}" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: THREADS_PER_METHOD must be a positive integer." >&2
+    exit 2
+fi
+if [[ "${PUBLISH_RESULTS}" != "0" && "${PUBLISH_RESULTS}" != "1" ]]; then
+    echo "ERROR: PUBLISH_RESULTS must be 0 or 1." >&2
     exit 2
 fi
 if [[ "${SLURM_CPUS_PER_TASK:-}" =~ ^[1-9][0-9]*$ ]] \
@@ -99,12 +115,26 @@ echo "loss_selection=${LOSS_SELECTION}"
 echo "method_gpus=${METHOD_GPUS:-not-used-for-aggregate}"
 echo "dataset_root=${DATASET_ROOT:-${PROJECT_ROOT}/dataset}"
 echo "threads_per_method=${THREADS_PER_METHOD}"
+echo "publish_results=${PUBLISH_RESULTS}"
+echo "result_repo_url=${RESULT_REPO_URL}"
 echo "commit=$(git rev-parse HEAD 2>/dev/null || echo unavailable)"
 git status --short 2>/dev/null || true
 nvidia-smi -L
 
 python -c "import sys, torch; assert sys.version_info[:3] == (3, 10, 20), sys.version; assert torch.version.cuda == '13.0', torch.version.cuda; assert torch.cuda.is_available(); print('python=', sys.version.split()[0]); print('torch=', torch.__version__); print('visible_gpus=', torch.cuda.device_count())"
 python verify_hpc_setup.py
+
+SHOULD_PUBLISH=0
+if [[ "${PUBLISH_RESULTS}" == "1" ]]; then
+    case "${STAGE}" in
+        all|joint|aggregate) SHOULD_PUBLISH=1 ;;
+    esac
+fi
+if [[ "${SHOULD_PUBLISH}" == "1" ]]; then
+    export RESULT_REPO_URL RESULT_GIT_USER_NAME RESULT_GIT_USER_EMAIL
+    bash "${SCRIPT_DIR}/arrhenius_publish_results.sh" \
+        --check-only "${EXP_NAME}" "${DATASET}"
+fi
 
 RUN_ARGS=(
     --stage "${STAGE}"
@@ -120,3 +150,8 @@ if [[ -n "${DATASET_ROOT}" ]]; then
 fi
 
 python -u "main_exp/${DATASET}.py" "${RUN_ARGS[@]}"
+
+if [[ "${SHOULD_PUBLISH}" == "1" ]]; then
+    bash "${SCRIPT_DIR}/arrhenius_publish_results.sh" \
+        --publish "${EXP_NAME}" "${DATASET}"
+fi
