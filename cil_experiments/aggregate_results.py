@@ -403,13 +403,16 @@ def build_dataset_search_summary(
     *,
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
+    order_ids: tuple[int, ...] | None = None,
+    seeds: tuple[int, ...] = SEEDS,
 ) -> str:
     """Return one unaggregated row per method/order/seed search unit."""
 
+    selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
     rows: list[dict[str, Any]] = []
     for method in methods:
-        for order_id in sorted(ORDERS_BY_DATASET[dataset]):
-            for seed in SEEDS:
+        for order_id in selected_orders:
+            for seed in seeds:
                 path = search_unit_path(search_root, method, order_id, seed)
                 if not path.is_file():
                     raise FileNotFoundError(path)
@@ -458,7 +461,7 @@ def build_dataset_search_summary(
                 }
                 row.update(_selected_metrics(summary, SUMMARY_CSV_METRICS))
                 rows.append(row)
-    expected = len(methods) * len(ORDERS_BY_DATASET[dataset]) * len(SEEDS)
+    expected = len(methods) * len(selected_orders) * len(seeds)
     if len(rows) != expected:
         raise RuntimeError(f"Expected {expected} search rows, found {len(rows)}")
     return _rows_csv(rows)
@@ -469,14 +472,17 @@ def build_dataset_joint_learning(
     *,
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
+    order_ids: tuple[int, ...] | None = None,
+    seeds: tuple[int, ...] = SEEDS,
 ) -> str:
     """Return one unaggregated row per from-scratch joint-learning run."""
 
+    selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
     task_count = len(next(iter(ORDERS_BY_DATASET[dataset].values())))
     rows: list[dict[str, Any]] = []
     for method in methods:
-        for order_id in sorted(ORDERS_BY_DATASET[dataset]):
-            for seed in SEEDS:
+        for order_id in selected_orders:
+            for seed in seeds:
                 path = joint_run_path(joint_root, dataset, method, order_id, seed)
                 if not path.is_file():
                     raise FileNotFoundError(path)
@@ -536,7 +542,7 @@ def build_dataset_joint_learning(
                 for index, value in enumerate(accuracy, start=1):
                     row[f"task_{index}_acc"] = float(value)
                 rows.append(row)
-    expected = len(methods) * len(ORDERS_BY_DATASET[dataset]) * len(SEEDS)
+    expected = len(methods) * len(selected_orders) * len(seeds)
     if len(rows) != expected:
         raise RuntimeError(f"Expected {expected} joint rows, found {len(rows)}")
     return _rows_csv(rows)
@@ -548,6 +554,8 @@ def write_dataset_reports(
     *,
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
+    order_ids: tuple[int, ...] | None = None,
+    seeds: tuple[int, ...] = SEEDS,
 ) -> tuple[Path, Path]:
     search_path = (
         Path(search_root) / "aggregate_results" / f"{dataset}_search_summary.csv"
@@ -558,13 +566,21 @@ def write_dataset_reports(
     atomic_write_text(
         search_path,
         build_dataset_search_summary(
-            search_root, dataset=dataset, methods=methods
+            search_root,
+            dataset=dataset,
+            methods=methods,
+            order_ids=order_ids,
+            seeds=seeds,
         ),
     )
     atomic_write_text(
         joint_path,
         build_dataset_joint_learning(
-            joint_root, dataset=dataset, methods=methods
+            joint_root,
+            dataset=dataset,
+            methods=methods,
+            order_ids=order_ids,
+            seeds=seeds,
         ),
     )
     return search_path, joint_path

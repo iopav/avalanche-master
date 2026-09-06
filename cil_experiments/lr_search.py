@@ -80,7 +80,16 @@ def _record(summary_path: Path, matrix_path: Path, checkpoint: Path) -> dict[str
     }
 
 
-def _new_payload(exp_name: str, dataset: str, method: str, order_id: int, seed: int, backbone: str, loss_selection: str) -> dict[str, Any]:
+def _new_payload(
+    exp_name: str,
+    dataset: str,
+    method: str,
+    order_id: int,
+    seed: int,
+    backbone: str,
+    loss_selection: str,
+    lr_candidates: tuple[float, ...],
+) -> dict[str, Any]:
     return new_order_seed_search(
         exp_name=exp_name,
         dataset=dataset,
@@ -89,7 +98,7 @@ def _new_payload(exp_name: str, dataset: str, method: str, order_id: int, seed: 
         seed=seed,
         backbone=backbone,
         loss_selection=loss_selection,
-        lr_candidates=LR_CANDIDATES,
+        lr_candidates=lr_candidates,
     )
 
 
@@ -107,11 +116,44 @@ def _load_unit(path: Path, expected: dict[str, Any]) -> dict[str, Any]:
 validate_search_unit = validate_order_seed_search
 
 
-def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path, exp_name: str, dataset: str, method: str, order_id: int, seed: int, device: torch.device, backbone: str, loss_selection: str) -> Path:
+def run_search_unit(
+    *,
+    project_root: Path,
+    dataset_root: Path,
+    search_root: Path,
+    exp_name: str,
+    dataset: str,
+    method: str,
+    order_id: int,
+    seed: int,
+    device: torch.device,
+    backbone: str,
+    loss_selection: str,
+    lr_candidates: tuple[float, ...] = LR_CANDIDATES,
+    parameter_overrides: dict[str, Any] | None = None,
+    data_role: str = "formal",
+) -> Path:
     if loss_selection not in LOSS_SELECTIONS:
         raise ValueError(f"Unknown loss selection: {loss_selection}")
+    lr_candidates = tuple(float(value) for value in lr_candidates)
+    if not lr_candidates or len(set(lr_candidates)) != len(lr_candidates):
+        raise ValueError("LR candidates must be non-empty and unique")
+    if any(not math.isfinite(value) or value <= 0 for value in lr_candidates):
+        raise ValueError("LR candidates must contain only positive finite values")
     path = search_unit_path(search_root, method, order_id, seed)
-    payload = _load_unit(path, _new_payload(exp_name, dataset, method, order_id, seed, backbone, loss_selection))
+    payload = _load_unit(
+        path,
+        _new_payload(
+            exp_name,
+            dataset,
+            method,
+            order_id,
+            seed,
+            backbone,
+            loss_selection,
+            lr_candidates,
+        ),
+    )
     if payload["status"] == STATUS_COMPLETED:
         validate_search_unit(payload)
         for key in ("best_checkpoint", "best_summary_file", "best_accuracy_matrix_file"):
@@ -120,7 +162,9 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
         selected_summary = json.loads(
             Path(payload["best_summary_file"]).read_text(encoding="utf-8")
         )
-        validate_summary(selected_summary)
+        # Joint learning fills intransigence after LR selection. A completed
+        # search must remain resumable while that downstream stage is pending.
+        validate_summary(selected_summary, allow_pending_intransigence=True)
         latency = selected_summary.get("inference", {}).get(
             "final_latency_ms_per_sample"
         )
@@ -136,8 +180,13 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
             )
         return path
     atomic_write_json(path, payload)
-    base_parameters = get_final_hyperparameters(dataset, method, require_locked=True)
-    for lr in LR_CANDIDATES:
+    base_parameters = get_final_hyperparameters(
+        dataset,
+        method,
+        parameter_overrides,
+        require_locked=data_role == "formal",
+    )
+    for lr in lr_candidates:
         key = str(lr)
         paths = candidate_paths(search_root, dataset, method, order_id, seed, lr)
         checkpoint = candidate_checkpoint_path(search_root, dataset, method, order_id, seed, lr)
@@ -177,9 +226,10 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
                     "status": "current_order_seed_lr_candidate",
                     "hyperparameter_search_flops": 0,
                     "test_set_used_for_selection": False,
+                    "required_trials": len(lr_candidates),
                 },
                 compute_intransigence_enabled=False, exp_name=exp_name,
-                data_role="formal", run_subdir=Path(f"order{order_id}") / f"lr{lr_token(lr)}",
+                data_role=data_role, run_subdir=Path(f"order{order_id}") / f"lr{lr_token(lr)}",
                 measure_latency=True, checkpoint_path=checkpoint,
                 loss_selection=loss_selection, include_dataset_dir=False,
                 artifact_stem=paths.summary.name.removesuffix("__summary.json"),
@@ -199,7 +249,13 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
             payload["candidates"][key] = {"status": STATUS_FAILED, "error_type": type(exc).__name__, "error_message": str(exc), "traceback": traceback.format_exc()}
             atomic_write_json(path, payload)
             raise
-    best_lr = min(LR_CANDIDATES, key=lambda value: (payload["candidates"][str(value)]["selection_loss"], LR_CANDIDATES.index(value)))
+    best_lr = min(
+        lr_candidates,
+        key=lambda value: (
+            payload["candidates"][str(value)]["selection_loss"],
+            lr_candidates.index(value),
+        ),
+    )
     selected = payload["candidates"][str(best_lr)]
     destination = best_checkpoint_path(search_root, dataset, method, order_id, seed, best_lr)
     promote_search_checkpoint(Path(selected["checkpoint_file"]), destination)

@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 CONDA_ENV_NAME="avalanche"
+SMOKE_ROOT="${SMOKE_ROOT:-${PROJECT_ROOT}/smoke}"
 
 cd "${PROJECT_ROOT}"
 
@@ -41,40 +42,18 @@ source "${CONDA_ROOT}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV_NAME}"
 
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
-export ARRHENIUS_PROJECT_ROOT="${PROJECT_ROOT}"
+SMOKE_RUN_NAME="${SMOKE_RUN_NAME:-job_${SLURM_JOB_ID}}"
+SMOKE_OUTPUT_ROOT="${SMOKE_ROOT}/${SMOKE_RUN_NAME}"
 
 python -c "import sys, torch; assert sys.version_info[:3] == (3, 10, 20), sys.version; assert torch.version.cuda == '13.0', torch.version.cuda; assert torch.cuda.is_available(); assert torch.cuda.device_count() >= 1; print('environment=', 'avalanche'); print('python=', sys.version.split()[0]); print('torch=', torch.__version__); print('visible_gpus=', torch.cuda.device_count())"
-python verify_hpc_setup.py
 python -c "import torch; x=torch.randn(2048,2048,device='cuda:0'); y=x@x; torch.cuda.synchronize(); print('CUDA OK', torch.cuda.get_device_name(0), float(y[0,0]))"
 
-# One diagnostic epoch using the actual UWave data and formal FLOP path. The
-# temporal backbone keeps this test small. Its outputs are diagnostic only.
-python -u - <<'PY'
-import os
-from pathlib import Path
+echo "smoke_output_root=${SMOKE_OUTPUT_ROOT}"
 
-import torch
-
-from cil_experiments.runner import run_experiment
-
-project_root = Path(os.environ["ARRHENIUS_PROJECT_ROOT"])
-job_id = os.environ.get("SLURM_JOB_ID", "interactive")
-exp_name = f"arrhenius_smoke_{job_id}"
-summary = run_experiment(
-    project_root=project_root,
-    dataset_root=project_root / "dataset",
-    result_root=project_root / f"result_{exp_name}",
-    dataset_name="uwave",
-    method="ewc",
-    order_id=1,
-    seed=62,
-    epochs=1,
-    device=torch.device("cuda:0"),
-    search_provenance={"hyperparameter_search_flops": 0},
-    backbone_id="temporal",
-    compute_intransigence_enabled=False,
-    exp_name=exp_name,
-    measure_latency=False,
-)
-print(f"SMOKE OK: {summary}")
-PY
+# Synthetic end-to-end smoke: 3 datasets, 6 methods, 2 orders, 1 seed,
+# 2 learning rates, 1 epoch per experience, temporal backbone. Runs
+# sequentially on cuda:0 and never reads or writes the formal dataset/results.
+python -u -m cil_experiments.smoke_pipeline \
+    --output-root "${SMOKE_OUTPUT_ROOT}" \
+    --device cuda:0 \
+    --exp-name "arrhenius_toy_smoke_${SMOKE_RUN_NAME}"

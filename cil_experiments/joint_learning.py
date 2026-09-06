@@ -235,6 +235,8 @@ def run_joint_unit(
     seed: int,
     device: torch.device,
     backbone: str,
+    parameter_overrides: dict[str, Any] | None = None,
+    data_role: str = "formal",
 ) -> Path:
     search_path = search_unit_path(search_root, method, order_id, seed)
     if not search_path.is_file():
@@ -267,7 +269,12 @@ def run_joint_unit(
         fill_from_joint_run(search_path, path)
         return path
 
-    parameters = get_final_hyperparameters(dataset, method, require_locked=True)
+    parameters = get_final_hyperparameters(
+        dataset,
+        method,
+        parameter_overrides,
+        require_locked=data_role == "formal",
+    )
     config = {
         "source_search_json": str(search_path.resolve()),
         "optimizer": parameters["optimizer"],
@@ -282,6 +289,7 @@ def run_joint_unit(
         "training_scope": "stage k uses the cumulative train data from ordered tasks 1..k",
         "strategy": "one from-scratch ordinary backbone and seen-class linear head per stage",
         "reference_accuracy": "lower-triangular matrix; intransigence uses its diagonal",
+        "data_role": data_role,
     }
     pending = {
         **identity,
@@ -295,7 +303,7 @@ def run_joint_unit(
     try:
         set_determinism(seed)
         data = build_dataset_bundle(
-            Path(dataset_root), DATASETS[dataset], order_id, data_role="formal"
+            Path(dataset_root), DATASETS[dataset], order_id, data_role=data_role
         )
         gpu_start = gpu_end = None
         if device.type == "cuda":

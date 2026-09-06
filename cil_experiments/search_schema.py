@@ -89,7 +89,7 @@ def validate_order_seed_search(payload: dict[str, Any]) -> None:
     if payload.get("total_search_flops") != sum(
         record["overall_learning_flops"] for record in candidates.values()
     ):
-        raise ValueError("Total search FLOPs do not equal the three candidates")
+        raise ValueError("Total search FLOPs do not equal the registered candidates")
     if payload.get("storage_bytes") != selected["storage_bytes"]:
         raise ValueError("Search storage does not equal selected model parameter bytes")
 

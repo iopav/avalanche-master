@@ -161,8 +161,10 @@ def _paths_for_role(
         train_x, train_y = SEARCH_FILES["train"]
         eval_x, eval_y = SEARCH_FILES["validation"]
         return directory / train_x, directory / train_y, directory / eval_x, directory / eval_y, spec.name != "spike"
-    if data_role != "formal":
-        raise ValueError(f"Unknown data_role {data_role!r}; expected 'search' or 'formal'")
+    if data_role not in {"formal", "smoke"}:
+        raise ValueError(
+            f"Unknown data_role {data_role!r}; expected 'search', 'formal', or 'smoke'"
+        )
     if spec.name == "spike":
         return (
             dataset_root / spec.train_x,
@@ -207,7 +209,7 @@ def build_dataset_bundle(
             eval_x, eval_y, sample_shape=sample_shape,
             x_dtype=spec.image_x_dtype, num_classes=spec.num_classes,
         )
-        if data_role == "formal":
+        if data_role in {"formal", "smoke"}:
             for image_labels, raw_labels in (
                 (train_y, Path(dataset_root) / spec.train_y),
                 (eval_y, Path(dataset_root) / spec.test_y),
