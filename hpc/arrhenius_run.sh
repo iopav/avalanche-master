@@ -8,12 +8,16 @@ set -euo pipefail
 # 数据集：spike、texture 或 uwave。
 DATASET="${DATASET:-uwave}"
 
+# Python entrypoint basename. Keep DATASET as spike/texture/uwave so result
+# validation and publication continue to use the canonical dataset name.
+ENTRYPOINT="${ENTRYPOINT:-${DATASET}}"
+
 # 阶段：search、joint、all 或 aggregate。分开执行时先 search，再 joint；
 # joint 在产物齐全后也会生成聚合报告。
 STAGE="${STAGE:-all}"
 
 # 实验唯一标识。修改模型或协议参数后必须换名，避免新旧产物混合。
-EXP_NAME="${EXP_NAME:-${DATASET}_pp2}"
+EXP_NAME="${EXP_NAME:-${ENTRYPOINT}_pp2}"
 
 # 已注册骨干。正式图像实验使用 resnet18_cifar；temporal 用于轻量诊断。
 BACKBONE="${BACKBONE:-resnet18_cifar}"
@@ -32,7 +36,7 @@ METHOD_GPUS="${METHOD_GPUS:-}"
 # 可选数据集绝对路径；留空时使用 PROJECT_ROOT/dataset。
 DATASET_ROOT="${DATASET_ROOT:-}"
 
-# 每个方法进程使用的CPU线程数，应按本次作业申请的 CPU 核数 ÷ 6
+# 每个方法进程使用的 CPU 线程数；总需求约为入口方法数乘以该值。
 THREADS_PER_METHOD="${THREADS_PER_METHOD:-1}"
 
 # 正式实验成功后是否复制并上传结果：1=自动发布，0=不发布。
@@ -54,6 +58,17 @@ CONDA_ENV_NAME="avalanche"
 
 cd "${PROJECT_ROOT}"
 
+case "${ENTRYPOINT}" in
+    "${DATASET}"|"${DATASET}-tagfex"|"${DATASET}-5method") ;;
+    *)
+        echo "ERROR: ENTRYPOINT must be ${DATASET}, ${DATASET}-tagfex, or ${DATASET}-5method." >&2
+        exit 2
+        ;;
+esac
+if [[ ! -f "${PROJECT_ROOT}/main_exp/${ENTRYPOINT}.py" ]]; then
+    echo "ERROR: missing main experiment entrypoint: main_exp/${ENTRYPOINT}.py" >&2
+    exit 2
+fi
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     echo "ERROR: no Slurm allocation detected. Apply for resources first." >&2
     exit 1
@@ -65,10 +80,6 @@ fi
 if [[ "${PUBLISH_RESULTS}" != "0" && "${PUBLISH_RESULTS}" != "1" ]]; then
     echo "ERROR: PUBLISH_RESULTS must be 0 or 1." >&2
     exit 2
-fi
-if [[ "${SLURM_CPUS_PER_TASK:-}" =~ ^[1-9][0-9]*$ ]] \
-    && (( THREADS_PER_METHOD * 6 > SLURM_CPUS_PER_TASK )); then
-    echo "WARNING: 6 methods x ${THREADS_PER_METHOD} threads exceeds SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK}." >&2
 fi
 if [[ -z "${METHOD_GPUS}" && "${STAGE}" != "aggregate" ]]; then
     echo "ERROR: set METHOD_GPUS for the GPUs in your allocation." >&2
@@ -108,6 +119,7 @@ echo "job_id=${SLURM_JOB_ID}"
 echo "host=$(hostname)"
 echo "project_root=${PROJECT_ROOT}"
 echo "dataset=${DATASET}"
+echo "entrypoint=${ENTRYPOINT}"
 echo "stage=${STAGE}"
 echo "exp_name=${EXP_NAME}"
 echo "backbone=${BACKBONE}"
@@ -149,7 +161,7 @@ if [[ -n "${DATASET_ROOT}" ]]; then
     RUN_ARGS+=(--dataset-root "${DATASET_ROOT}")
 fi
 
-python -u "main_exp/${DATASET}.py" "${RUN_ARGS[@]}"
+python -u "main_exp/${ENTRYPOINT}.py" "${RUN_ARGS[@]}"
 
 if [[ "${SHOULD_PUBLISH}" == "1" ]]; then
     bash "${SCRIPT_DIR}/arrhenius_publish_results.sh" \
