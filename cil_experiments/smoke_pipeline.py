@@ -52,9 +52,14 @@ def _labels(num_classes: int, samples_per_class: int) -> np.ndarray:
 def _raw_array(spec, labels: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     shape = (len(labels), *spec.train_shape[1:])
     if spec.name == "spike":
-        values = rng.integers(0, 2, size=shape, dtype=np.int8).astype(np.float32)
+        # Match the source data's sparse event density (~0.0037) instead of
+        # generating dense Bernoulli(0.5) inputs that overflow at lr=0.1 after
+        # the runtime x255 image conversion.
+        values = (rng.random(shape) < 0.0035).astype(np.float32)
         for index, label in enumerate(labels):
-            values[index, :, int(label) % spec.in_channels] = 1.0
+            channel = int(label) % spec.in_channels
+            times = (int(label) * 17 + np.arange(4) * 67) % spec.timesteps
+            values[index, times, channel] = 1.0
         return values
     values = rng.normal(0.0, 0.25, size=shape).astype(spec.source_x_dtype)
     for index, label in enumerate(labels):
@@ -176,6 +181,8 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
         "epochs_per_experience": SMOKE_EPOCHS,
         "toy_data": generate_toy_datasets(toy_root),
         "reports": [],
+        "completed_units": 0,
+        "current_unit": None,
     }
     atomic_write_json(manifest_path, manifest)
 
@@ -187,6 +194,13 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
                     if order_id not in ORDERS_BY_DATASET[dataset]:
                         raise KeyError(f"Missing smoke order {dataset}/order-{order_id}")
                     for seed in SMOKE_SEEDS:
+                        manifest["current_unit"] = {
+                            "dataset": dataset,
+                            "method": method,
+                            "order": order_id,
+                            "seed": seed,
+                        }
+                        atomic_write_json(manifest_path, manifest)
                         search_path = run_search_unit(
                             project_root=Path(__file__).resolve().parents[1],
                             dataset_root=toy_root,
@@ -223,6 +237,8 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
                             f"seed={seed} search={search_path}",
                             flush=True,
                         )
+                        manifest["completed_units"] += 1
+                        atomic_write_json(manifest_path, manifest)
 
             reports = write_dataset_reports(
                 search_root,
@@ -236,6 +252,7 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
 
         manifest["status"] = "completed"
         manifest["finished_at"] = timestamp()
+        manifest["current_unit"] = None
         atomic_write_json(manifest_path, manifest)
         print(f"SMOKE_COMPLETE manifest={manifest_path}", flush=True)
         return manifest_path

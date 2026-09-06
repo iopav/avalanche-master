@@ -179,6 +179,14 @@ class _ConciseProgressTracker(SupervisedPlugin):
     def after_training_epoch(self, strategy, **kwargs):
         if self.samples:
             self.last_epoch_mean = self.loss_sum / self.samples
+            if not np.isfinite(self.last_epoch_mean):
+                raise FloatingPointError(
+                    "Non-finite training loss "
+                    f"dataset={self.dataset} method={self.method} "
+                    f"order={self.order_id} seed={self.seed} "
+                    f"task={self.task_index}/{self.tasks} epoch={self.epoch} "
+                    f"loss={self.last_epoch_mean!r}"
+                )
             print(
                 "TRAIN "
                 f"dataset={self.dataset} method={self.method} "
@@ -737,6 +745,14 @@ def run_experiment(
                 )
             else:
                 selection_loss = progress.last_epoch_mean
+        if loss_selection is not None and (
+            selection_loss is None or not np.isfinite(selection_loss)
+        ):
+            raise FloatingPointError(
+                "Invalid selection loss before summary validation "
+                f"dataset={dataset_name} method={method} order={order_id} "
+                f"seed={seed} mode={loss_selection} loss={selection_loss!r}"
+            )
         total_s = float(sum(task_wall))
         incremental = task_wall[1:]
         flop_summary = summarize_learning_flops(
