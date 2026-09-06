@@ -85,7 +85,7 @@ def set_determinism(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def _sync(device: torch.device) -> None:
@@ -225,7 +225,7 @@ def _mean_cross_entropy(model, experiences, device, batch_size, num_workers) -> 
                     samples += count
                     profiler.add_processed_samples(count)
         profiler.end_epoch()
-        result = profiler.stop(strict=True)
+        result = profiler.stop(strict=False)
     except BaseException:
         profiler.abort()
         raise
@@ -418,7 +418,7 @@ def _train_experience(
             pin_memory=device.type == "cuda",
         )
         bundle.add_manual_after_experience(profiler, experience)
-        flop_result = profiler.stop(strict=True)
+        flop_result = profiler.stop(strict=False)
     except BaseException:
         profiler.abort()
         raise

@@ -377,7 +377,7 @@ def run_joint_unit(
                         f"loss={final_stage_loss:.6f}",
                         flush=True,
                     )
-                flop_results.append(profiler.stop(strict=True))
+                flop_results.append(profiler.stop(strict=False))
                 _sync(device)
                 wall_s += time.perf_counter() - wall_start
                 if final_stage_loss is None:

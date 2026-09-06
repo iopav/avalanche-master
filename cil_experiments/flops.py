@@ -110,6 +110,27 @@ def batch_norm_backward_flop(
     return 15 * _numel(input_shape)
 
 
+def batch_norm_training_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
+    """BatchNorm variants whose schema implies training with statistic updates."""
+    return 8 * _numel(input_shape)
+
+
+def cudnn_batch_norm_backward_flop(
+    input_shape, grad_output_shape, weight_shape=None, running_mean_shape=None,
+    running_var_shape=None, save_mean_shape=None, save_var_shape=None,
+    epsilon=1e-5, reserve_space_shape=None, *args, out_shape=None, **kwargs
+) -> int:
+    """Apply the shared BatchNorm-backward convention to cuDNN dispatch."""
+    return 15 * _numel(input_shape)
+
+
+def batch_norm_impl_index_backward_flop(
+    impl_index, input_shape, grad_output_shape, *args, out_shape=None, **kwargs
+) -> int:
+    """Backend-selecting BatchNorm backward wrapper; ``impl_index`` is metadata."""
+    return 15 * _numel(input_shape)
+
+
 def batch_norm_eval_flop(input_shape, *args, out_shape=None, **kwargs) -> int:
     return 4 * _numel(input_shape)
 
@@ -247,6 +268,21 @@ def mse_loss_backward_flop(
     return n * (3 + (1 if int(reduction) == 1 else 0))
 
 
+def _convolution_forward_flop(
+    x_shape, w_shape, bias_shape, transposed, out_shape
+) -> int:
+    if not (_is_shape(x_shape) and _is_shape(w_shape)):
+        return 0
+    if not transposed and not _is_shape(out_shape):
+        return 0
+    batch = x_shape[0]
+    conv_shape = (x_shape if transposed else out_shape)[2:]
+    c_out, c_in, *kernel = w_shape
+    macs = math.prod(conv_shape) * math.prod(kernel) * batch * c_out * c_in
+    bias_adds = _numel(out_shape) if bias_shape is not None else 0
+    return 2 * macs + bias_adds
+
+
 def convolution_flop(
     x_shape,
     w_shape,
@@ -259,12 +295,75 @@ def convolution_flop(
     out_shape=None,
     **kwargs,
 ) -> int:
-    batch = x_shape[0]
-    conv_shape = (x_shape if transposed else out_shape)[2:]
-    c_out, c_in, *kernel = w_shape
-    macs = math.prod(conv_shape) * math.prod(kernel) * batch * c_out * c_in
-    bias_adds = _numel(out_shape) if bias_shape is not None else 0
-    return 2 * macs + bias_adds
+    return _convolution_forward_flop(
+        x_shape, w_shape, bias_shape, bool(transposed), out_shape
+    )
+
+
+def conv2d_flop(
+    x_shape, w_shape, bias_shape=None, *args, out_shape=None, **kwargs
+) -> int:
+    return _convolution_forward_flop(x_shape, w_shape, bias_shape, False, out_shape)
+
+
+def cudnn_convolution_flop(
+    x_shape, w_shape, padding, stride, dilation, groups, *args,
+    out_shape=None, **kwargs,
+) -> int:
+    # aten.cudnn_convolution has no bias argument. A direct use of
+    # convolution_flop would mistake ``padding`` for a bias tensor.
+    return _convolution_forward_flop(x_shape, w_shape, None, False, out_shape)
+
+
+def backend_convolution_flop(
+    x_shape, w_shape, bias_shape, *args, out_shape=None, **kwargs
+) -> int:
+    """Convolution wrappers such as MKLDNN/MIOpen that include an explicit bias."""
+    return _convolution_forward_flop(x_shape, w_shape, bias_shape, False, out_shape)
+
+
+def cudnn_convolution_relu_flop(
+    x_shape, w_shape, bias_shape, *args, out_shape=None, **kwargs
+) -> int:
+    # ReLU is comparison-only under this project's FLOP convention.
+    return _convolution_forward_flop(x_shape, w_shape, bias_shape, False, out_shape)
+
+
+def cudnn_convolution_add_relu_flop(
+    x_shape, w_shape, z_shape, alpha, bias_shape, *args,
+    out_shape=None, **kwargs,
+) -> int:
+    elements = _output_numel(out_shape, z_shape)
+    residual = elements
+    if alpha is not None:
+        try:
+            scaled = float(alpha) != 1.0
+        except (TypeError, ValueError):
+            scaled = True
+        residual += elements if scaled else 0
+    return (
+        _convolution_forward_flop(x_shape, w_shape, bias_shape, False, out_shape)
+        + residual
+    )
+
+
+def cudnn_convolution_transpose_flop(
+    x_shape, w_shape, *args, out_shape=None, **kwargs
+) -> int:
+    return _convolution_forward_flop(x_shape, w_shape, None, True, out_shape)
+
+
+def slow_conv2d_flop(
+    x_shape, w_shape, kernel_size, bias_shape=None, *args,
+    out_shape=None, **kwargs,
+) -> int:
+    return _convolution_forward_flop(x_shape, w_shape, bias_shape, False, out_shape)
+
+
+def nnpack_convolution_flop(
+    x_shape, w_shape, bias_shape=None, *args, out_shape=None, **kwargs
+) -> int:
+    return _convolution_forward_flop(x_shape, w_shape, bias_shape, False, out_shape)
 
 
 def convolution_backward_flop(
@@ -326,6 +425,65 @@ def convolution_backward_flop(
         values_per_channel = _numel(grad_out_shape) // channels
         total += channels * max(0, values_per_channel - 1)
     return int(total)
+
+
+def convolution_backward_overrideable_flop(
+    grad_out_shape,
+    x_shape,
+    w_shape,
+    stride,
+    padding,
+    dilation,
+    transposed,
+    output_padding,
+    groups,
+    output_mask,
+    *args,
+    out_shape=None,
+    **kwargs,
+) -> int:
+    return convolution_backward_flop(
+        grad_out_shape,
+        x_shape,
+        w_shape,
+        None,
+        stride,
+        padding,
+        dilation,
+        transposed,
+        output_padding,
+        groups,
+        output_mask,
+        out_shape=out_shape,
+    )
+
+
+def slow_conv2d_backward_flop(
+    grad_out_shape,
+    x_shape,
+    w_shape,
+    kernel_size,
+    stride,
+    padding,
+    output_mask=(True, True, True),
+    *args,
+    out_shape=None,
+    **kwargs,
+) -> int:
+    return convolution_backward_flop(
+        grad_out_shape,
+        x_shape,
+        w_shape,
+        None,
+        stride,
+        padding,
+        (1, 1),
+        False,
+        (0, 0),
+        1,
+        output_mask,
+        out_shape=out_shape,
+    )
 
 
 def addmm_flop(self_shape, a_shape, b_shape, *args, out_shape=None, **kwargs) -> int:
@@ -406,17 +564,31 @@ def build_custom_mapping() -> dict[Any, Callable[..., int]]:
         add(name, norm_flop)
     add("native_group_norm", group_norm_flop)
     add("native_group_norm_backward", group_norm_backward_flop)
+    add("batch_norm", batch_norm_flop)
+    add("batch_norm_backward", batch_norm_backward_flop)
+    add("_batch_norm_impl_index", batch_norm_flop)
+    add("_batch_norm_impl_index_backward", batch_norm_impl_index_backward_flop)
+    add("_batch_norm_with_update", batch_norm_training_flop)
+    add("_batch_norm_with_update_functional", batch_norm_training_flop)
+    add("_batch_norm_no_update", batch_norm_eval_flop)
     add("native_batch_norm", batch_norm_flop)
     add("_native_batch_norm_legit", batch_norm_flop)
     add("_native_batch_norm_legit_functional", batch_norm_flop)
     add("_native_batch_norm_legit_no_training", batch_norm_eval_flop)
     add("native_batch_norm_backward", batch_norm_backward_flop)
+    add("cudnn_batch_norm", batch_norm_flop)
+    add("cudnn_batch_norm_backward", cudnn_batch_norm_backward_flop)
+    add("miopen_batch_norm", batch_norm_flop)
+    add("miopen_batch_norm_backward", cudnn_batch_norm_backward_flop)
     add("native_layer_norm", group_norm_flop)
     add("native_layer_norm_backward", group_norm_backward_flop)
     add("xlogy", xlogy_flop)
     add("adaptive_avg_pool1d", adaptive_pool_flop)
     add("adaptive_avg_pool2d", adaptive_pool_flop)
+    add("_adaptive_avg_pool2d", adaptive_pool_flop)
     add("_adaptive_avg_pool2d_backward", adaptive_pool_backward_flop)
+    add("mkldnn_adaptive_avg_pool2d", adaptive_pool_flop)
+    add("mkldnn_adaptive_avg_pool2d_backward", adaptive_pool_backward_flop)
     add("_softmax", softmax_flop)
     add("_log_softmax", log_softmax_flop)
     add("_softmax_backward_data", softmax_backward_flop)
@@ -428,11 +600,25 @@ def build_custom_mapping() -> dict[Any, Callable[..., int]]:
     add("binary_cross_entropy_backward", binary_cross_entropy_backward_flop)
     add("mse_loss", mse_loss_flop)
     add("mse_loss_backward", mse_loss_backward_flop)
+    add("conv2d", conv2d_flop)
     add("convolution", convolution_flop)
     add("_convolution", convolution_flop)
-    add("cudnn_convolution", convolution_flop)
+    add("_convolution_mode", conv2d_flop)
+    add("cudnn_convolution", cudnn_convolution_flop)
+    add("cudnn_convolution_relu", cudnn_convolution_relu_flop)
+    add("cudnn_convolution_add_relu", cudnn_convolution_add_relu_flop)
+    add("cudnn_convolution_transpose", cudnn_convolution_transpose_flop)
+    add("mkldnn_convolution", backend_convolution_flop)
+    add("miopen_convolution", backend_convolution_flop)
+    add("miopen_convolution_relu", cudnn_convolution_relu_flop)
+    add("miopen_convolution_add_relu", cudnn_convolution_add_relu_flop)
+    add("_slow_conv2d_forward", slow_conv2d_flop)
+    add("_slow_conv2d_backward", slow_conv2d_backward_flop)
+    add("thnn_conv2d", slow_conv2d_flop)
+    add("_nnpack_spatial_convolution", nnpack_convolution_flop)
     add("convolution_overrideable", convolution_flop)
     add("convolution_backward", convolution_backward_flop)
+    add("convolution_backward_overrideable", convolution_backward_overrideable_flop)
     add("addmm", addmm_flop)
     add("baddbmm", baddbmm_flop)
     add("cov", covariance_flop)

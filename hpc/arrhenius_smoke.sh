@@ -50,9 +50,10 @@ python -c "import torch; x=torch.randn(2048,2048,device='cuda:0'); y=x@x; torch.
 
 echo "smoke_output_root=${SMOKE_OUTPUT_ROOT}"
 
-# Synthetic end-to-end smoke: 3 datasets, 6 methods, 2 orders, 1 seed,
-# 2 learning rates, 1 epoch per experience, temporal backbone. Runs
-# sequentially on cuda:0 and never reads or writes the formal dataset/results.
+# Synthetic end-to-end smoke: first audits one formal ResNet18 train/backward/eval
+# step, then runs 3 datasets, 6 methods, 2 orders, 1 seed, 2 learning rates and
+# 1 epoch per experience with the lightweight temporal backbone. Runs sequentially
+# on cuda:0 and never reads or writes the formal dataset/results.
 python -u -m cil_experiments.smoke_pipeline \
     --output-root "${SMOKE_OUTPUT_ROOT}" \
     --device cuda:0 \

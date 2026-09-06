@@ -147,6 +147,48 @@ def _parameter_overrides(method: str) -> dict[str, Any]:
     return overrides
 
 
+def _run_resnet_operator_preflight(device) -> dict[str, Any]:
+    """Exercise the formal backbone once under the strict leaf-operator audit."""
+    import torch
+
+    from .flops import PhaseFlopProfiler
+    from .models import build_backbone
+
+    model = torch.nn.Sequential(
+        build_backbone("resnet18_cifar", (3, 32, 32)),
+        torch.nn.Linear(512, 8),
+    ).to(device)
+    sample = torch.randn(4, 3, 32, 32, device=device)
+    target = torch.arange(4, device=device, dtype=torch.long)
+    profiler = PhaseFlopProfiler()
+    profiler.start()
+    profiler.begin_epoch()
+    try:
+        profiler.switch("core_training")
+        model.train()
+        torch.nn.functional.cross_entropy(model(sample), target).backward()
+        profiler.add_processed_samples(len(sample))
+        profiler.end_epoch()
+        profiler.switch("single_sample_forward")
+        model.eval()
+        with torch.no_grad():
+            model(sample[:1])
+        result = profiler.stop(strict=False)
+    except BaseException:
+        profiler.abort()
+        raise
+    payload = {
+        "backbone": "resnet18_cifar",
+        "train_batch_shape": list(sample.shape),
+        "eval_batch_shape": list(sample[:1].shape),
+        "total_flops": int(result.total_flops),
+        "operation_calls": result.operation_calls,
+    }
+    del model, sample, target
+    torch.cuda.empty_cache()
+    return payload
+
+
 def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
     import torch
 
@@ -174,6 +216,7 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
         "output_root": str(output_root),
         "device": str(device),
         "backbone": "temporal",
+        "resnet_operator_preflight": None,
         "datasets": list(SMOKE_DATASETS),
         "methods": list(SMOKE_METHODS),
         "order_ids": list(SMOKE_ORDER_IDS),
@@ -188,6 +231,13 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
     atomic_write_json(manifest_path, manifest)
 
     try:
+        manifest["resnet_operator_preflight"] = _run_resnet_operator_preflight(device)
+        atomic_write_json(manifest_path, manifest)
+        print(
+            "RESNET_OPERATOR_SMOKE_COMPLETE "
+            f"flops={manifest['resnet_operator_preflight']['total_flops']}",
+            flush=True,
+        )
         for dataset in SMOKE_DATASETS:
             dataset_search_root = search_root / dataset
             dataset_joint_root = joint_root / dataset

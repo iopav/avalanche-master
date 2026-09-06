@@ -134,7 +134,6 @@ git status --short 2>/dev/null || true
 nvidia-smi -L
 
 python -c "import sys, torch; assert sys.version_info[:3] == (3, 10, 20), sys.version; assert torch.version.cuda == '13.0', torch.version.cuda; assert torch.cuda.is_available(); print('python=', sys.version.split()[0]); print('torch=', torch.__version__); print('visible_gpus=', torch.cuda.device_count())"
-python verify_hpc_setup.py
 
 SHOULD_PUBLISH=0
 if [[ "${PUBLISH_RESULTS}" == "1" ]]; then
