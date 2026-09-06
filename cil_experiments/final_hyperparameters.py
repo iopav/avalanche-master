@@ -18,10 +18,10 @@ from typing import Any
 # only as initial candidates. The registry stays unlocked until every
 # dataset-method-backbone setting has been revalidated.
 FINAL_HYPERPARAMETERS_LOCKED = True
-EPOCH = 10
+EPOCH = 20
 MOMENTUM =0.9
 WEIGHT_DECAY = 5e-4
-TRAIN_MB_SIZE = 32
+TRAIN_MB_SIZE = 64
 EVAL_MB_SIZE = 128
     
 
@@ -38,7 +38,7 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
             "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
-            "memory_size": 2000, "batch_size_mem": 200,
+            "memory_size": 2000, "batch_size_mem": 100,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
