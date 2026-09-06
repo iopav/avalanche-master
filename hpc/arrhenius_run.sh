@@ -40,7 +40,7 @@ THREADS_PER_METHOD="${THREADS_PER_METHOD:-1}"
 PUBLISH_RESULTS="${PUBLISH_RESULTS:-1}"
 
 # 私有结果仓库。通常不需要修改；如改用 SSH，可在启动命令中覆盖此变量。
-RESULT_REPO_URL="${RESULT_REPO_URL:-https://github.com/iopav/result-pp2.git}"
+RESULT_REPO_URL="${RESULT_REPO_URL:-git@github.com:iopav/result-pp2.git}"
 
 # Git 提交身份。已有全局 user.name/user.email 时留空；否则在启动命令中设置，
 # 例如 RESULT_GIT_USER_NAME="Your Name" RESULT_GIT_USER_EMAIL="you@example.com"。

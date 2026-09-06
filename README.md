@@ -1,6 +1,6 @@
 # PP2 Continual Learning HPC Repository
 
-记得配置自己的github。
+记得配置自己的github。测试
 
 这是用于超算运行 PP2 主实验的精简仓库，包含本项目修改过的本地 Avalanche 源码、六种 CIL 方法、三个数据集入口、学习率搜索、阶段式 joint learning、指标与 FLOPs 计算、断点恢复和结果汇总。数据集、checkpoint、训练日志和实验结果不进入 Git。
 
