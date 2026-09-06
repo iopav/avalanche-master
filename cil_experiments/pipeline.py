@@ -7,7 +7,10 @@ from pathlib import Path
 from .registry import DATASETS, FORMAL_METHODS
 
 
-def _parse_method_gpus(value: str) -> dict[str, str]:
+def _parse_method_gpus(
+    value: str,
+    expected_methods: tuple[str, ...] = FORMAL_METHODS,
+) -> dict[str, str]:
     """Parse ``method=gpu`` pairs supplied by an HPC launch script."""
     result: dict[str, str] = {}
     for item in value.split(","):
@@ -22,7 +25,7 @@ def _parse_method_gpus(value: str) -> dict[str, str]:
         if method in result:
             raise ValueError(f"Duplicate method in --method-gpus: {method}")
         result[method] = gpu
-    expected = set(FORMAL_METHODS)
+    expected = set(expected_methods)
     if set(result) != expected:
         raise ValueError(
             "--method-gpus must contain exactly "
@@ -113,10 +116,16 @@ def run_dataset_pipeline(
     method_gpus: dict[str, str],
     argv: list[str] | None = None,
 ) -> int:
-    """Run one dataset's six independent search -> joint pipelines."""
+    """Run one dataset's configured independent search -> joint pipelines."""
 
     if dataset not in DATASETS:
         raise ValueError(f"Unknown dataset: {dataset}")
+    unknown_methods = set(method_gpus) - set(FORMAL_METHODS)
+    if unknown_methods:
+        raise ValueError(f"Unknown methods in METHOD_GPUS: {sorted(unknown_methods)}")
+    methods = tuple(method for method in FORMAL_METHODS if method in method_gpus)
+    if not methods:
+        raise ValueError("METHOD_GPUS must contain at least one formal method")
     parser = argparse.ArgumentParser(description=f"Run the PP2 {dataset} experiment")
     parser.add_argument(
         "--stage", choices=("all", "search", "joint", "aggregate"), default="all"
@@ -132,8 +141,8 @@ def run_dataset_pipeline(
     parser.add_argument(
         "--method-gpus",
         help=(
-            "Explicit comma-separated method=gpu mapping, for example "
-            "ewc=0,er_ace=0,icarl=1,fecam=1,tagfex=2,cwr_star=2. "
+            "Explicit comma-separated method=gpu mapping for exactly the methods "
+            f"configured by this entrypoint: {','.join(methods)}. "
             "Overrides the mapping in the dataset entrypoint."
         ),
     )
@@ -142,11 +151,11 @@ def run_dataset_pipeline(
     backbone = args.backbone
     loss_selection = args.loss_selection
     method_gpus = (
-        _parse_method_gpus(args.method_gpus)
+        _parse_method_gpus(args.method_gpus, methods)
         if args.method_gpus is not None
         else dict(method_gpus)
     )
-    expected_methods = set(FORMAL_METHODS)
+    expected_methods = set(methods)
     if set(method_gpus) != expected_methods:
         raise ValueError(
             f"METHOD_GPUS must contain exactly {sorted(expected_methods)}"
@@ -174,7 +183,7 @@ def run_dataset_pipeline(
                     loss_selection,
                     args.stage,
                 ): method
-                for method in FORMAL_METHODS
+                for method in methods
             }
             for future in as_completed(futures):
                 method, search_count, joint_count = future.result()
@@ -187,7 +196,7 @@ def run_dataset_pipeline(
             search_root,
             joint_root,
             dataset=dataset,
-            methods=FORMAL_METHODS,
+            methods=methods,
         ):
             print(path)
     return 0
