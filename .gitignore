@@ -52,6 +52,8 @@ wandb/
 *.ckpt
 slurm-*.out
 slurm-*.err
+*.out
+*.err
 
 # Local archives and transfer staging
 *.zip
