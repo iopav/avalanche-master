@@ -140,14 +140,34 @@ def _evaluate_experience(
     return accuracy
 
 
-class _LastEpochLossTracker(SupervisedPlugin):
-    def __init__(self):
+class _ConciseProgressTracker(SupervisedPlugin):
+    def __init__(self, *, dataset: str, method: str, order_id: int, seed: int):
         super().__init__()
+        self.dataset = dataset
+        self.method = method
+        self.order_id = int(order_id)
+        self.seed = int(seed)
+        self.task_index = 0
+        self.tasks = 0
+        self.epoch = 0
         self.loss_sum = 0.0
         self.samples = 0
         self.last_epoch_mean: float | None = None
 
+    def start_task(self, task_index: int, tasks: int) -> None:
+        self.task_index = int(task_index)
+        self.tasks = int(tasks)
+        self.epoch = 0
+        self.loss_sum = 0.0
+        self.samples = 0
+        self.last_epoch_mean = None
+
+    @staticmethod
+    def learning_rate(strategy) -> float:
+        return float(strategy.optimizer.param_groups[0]["lr"])
+
     def before_training_epoch(self, strategy, **kwargs):
+        self.epoch += 1
         self.loss_sum = 0.0
         self.samples = 0
 
@@ -159,6 +179,16 @@ class _LastEpochLossTracker(SupervisedPlugin):
     def after_training_epoch(self, strategy, **kwargs):
         if self.samples:
             self.last_epoch_mean = self.loss_sum / self.samples
+            print(
+                "TRAIN "
+                f"dataset={self.dataset} method={self.method} "
+                f"order={self.order_id} seed={self.seed} "
+                f"task={self.task_index}/{self.tasks} "
+                f"epoch={self.epoch}/{int(strategy.train_epochs)} "
+                f"lr={self.learning_rate(strategy):.8g} "
+                f"loss={self.last_epoch_mean:.6f}",
+                flush=True,
+            )
 
 
 def _mean_cross_entropy(model, experiences, device, batch_size, num_workers) -> tuple[float, int]:
@@ -611,10 +641,15 @@ def run_experiment(
         terminal_values: list[float] = []
         final_test_inference_s = 0.0
         final_test_samples = 0
-        loss_tracker = _LastEpochLossTracker()
+        progress = _ConciseProgressTracker(
+            dataset=dataset_name,
+            method=method,
+            order_id=order_id,
+            seed=seed,
+        )
+        bundle.strategy.plugins.append(progress)
         for task_index, experience in enumerate(data.benchmark.train_stream):
-            if task_index == data.tasks - 1 and loss_selection == "last_epoch_train_mean":
-                bundle.strategy.plugins.append(loss_tracker)
+            progress.start_task(task_index + 1, data.tasks)
             result, wall_s, gpu_ms, peak_mib = _train_experience(
                 bundle, experience, device, num_workers
             )
@@ -645,6 +680,28 @@ def run_experiment(
                 matrix[task_index, test_index] = accuracy
             if not np.isfinite(matrix[task_index, : task_index + 1]).all():
                 raise FloatingPointError(f"Non-finite accuracy after task {task_index + 1}")
+            seen_weights = np.asarray(
+                data.test_samples_per_task[: task_index + 1], dtype=np.float64
+            )
+            seen_accuracy = float(
+                np.average(
+                    matrix[task_index, : task_index + 1], weights=seen_weights
+                )
+            )
+            task_loss = (
+                f"{progress.last_epoch_mean:.6f}"
+                if progress.last_epoch_mean is not None
+                else "n/a"
+            )
+            print(
+                "TASK_COMPLETE "
+                f"dataset={dataset_name} method={method} "
+                f"order={order_id} seed={seed} "
+                f"task={task_index + 1}/{data.tasks} "
+                f"lr={progress.learning_rate(bundle.strategy):.8g} "
+                f"loss={task_loss} acc={seen_accuracy:.6f}",
+                flush=True,
+            )
             log.info(
                 "task=%d wall_s=%.6f gpu_ms=%s peak_mib=%s accuracies=%s flops=%s",
                 task_index + 1,
@@ -679,7 +736,7 @@ def run_experiment(
                     int(resolved_hyperparameters["eval_mb_size"]), num_workers,
                 )
             else:
-                selection_loss = loss_tracker.last_epoch_mean
+                selection_loss = progress.last_epoch_mean
         total_s = float(sum(task_wall))
         incremental = task_wall[1:]
         flop_summary = summarize_learning_flops(

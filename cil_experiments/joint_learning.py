@@ -339,7 +339,8 @@ def run_joint_unit(
                 _sync(device)
                 wall_start = time.perf_counter()
                 profiler.start()
-                for _ in range(int(parameters["epochs_per_experience"])):
+                stage_epochs = int(parameters["epochs_per_experience"])
+                for epoch_index in range(stage_epochs):
                     profiler.begin_epoch()
                     loss_sum = 0.0
                     samples = 0
@@ -359,6 +360,15 @@ def run_joint_unit(
                     if not samples:
                         raise ValueError("Joint cumulative training dataset is empty")
                     final_stage_loss = loss_sum / samples
+                    print(
+                        "JOINT_TRAIN "
+                        f"dataset={dataset} method={method} order={order_id} "
+                        f"seed={seed} stage={stage_index + 1}/{data.tasks} "
+                        f"epoch={epoch_index + 1}/{stage_epochs} "
+                        f"lr={optimizer.param_groups[0]['lr']:.8g} "
+                        f"loss={final_stage_loss:.6f}",
+                        flush=True,
+                    )
                 flop_results.append(profiler.stop(strict=True))
                 _sync(device)
                 wall_s += time.perf_counter() - wall_start
@@ -384,6 +394,19 @@ def run_joint_unit(
                         accuracy = evaluation
                     row[test_index] = float(accuracy)
                 accuracy_matrix.append(row)
+                seen_weights = data.test_samples_per_task[: stage_index + 1]
+                seen_accuracy = sum(
+                    float(row[index]) * int(seen_weights[index])
+                    for index in range(stage_index + 1)
+                ) / sum(int(value) for value in seen_weights)
+                print(
+                    "JOINT_STAGE_COMPLETE "
+                    f"dataset={dataset} method={method} order={order_id} "
+                    f"seed={seed} stage={stage_index + 1}/{data.tasks} "
+                    f"lr={optimizer.param_groups[0]['lr']:.8g} "
+                    f"loss={final_stage_loss:.6f} acc={seen_accuracy:.6f}",
+                    flush=True,
+                )
             except BaseException:
                 profiler.abort()
                 raise

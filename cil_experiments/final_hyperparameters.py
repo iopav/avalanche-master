@@ -20,6 +20,7 @@ from typing import Any
 FINAL_HYPERPARAMETERS_LOCKED = True
 EPOCH = 10
 MOMENTUM =0.9
+WEIGHT_DECAY = 5e-4
 TRAIN_MB_SIZE = 32
 EVAL_MB_SIZE = 128
     
@@ -35,38 +36,38 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     "spike": {
         "er_ace": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "tukey": False, "shrinkage": True, "shrink1": 1.0,
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
-            "weight_decay": 5e-4, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
@@ -74,9 +75,9 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
-            "init_epochs": 60, "inc_epochs": 40,
+            "init_epochs": EPOCH, "inc_epochs": EPOCH,
             "init_lr": 0.1, "inc_lr": 0.1,
-            "init_weight_decay": 5e-4, "inc_weight_decay": 2e-4,
+            "init_weight_decay": WEIGHT_DECAY, "inc_weight_decay": WEIGHT_DECAY,
             "init_milestones": (60, 120, 170),
             "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },
@@ -88,38 +89,38 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     "texture": {
         "er_ace": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "tukey": False, "shrinkage": True, "shrink1": 1.0,
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
-            "weight_decay": 5e-4, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
@@ -127,9 +128,9 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
-            "init_epochs": 60, "inc_epochs": 40,
+            "init_epochs": EPOCH, "inc_epochs": EPOCH,
             "init_lr": 0.1, "inc_lr": 0.1,
-            "init_weight_decay": 5e-4, "inc_weight_decay": 2e-4,
+            "init_weight_decay": WEIGHT_DECAY, "inc_weight_decay": WEIGHT_DECAY,
             "init_milestones": (60, 120, 170),
             "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },
@@ -137,38 +138,38 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     "uwave": {
         "er_ace": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "batch_size_mem": 200,
         },
         "ewc": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "ewc_lambda": 0.4, "mode": "separate",
         },
         "cwr_star": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "cwr_layer_name": "classifier.classifier",
         },
         "icarl": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "fixed_memory": True,
         },
         "fecam": {
             "optimizer": "SGD", "learning_rate": 0.01, "momentum": MOMENTUM,
-            "weight_decay": 0.0, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "tukey": False, "shrinkage": True, "shrink1": 1.0,
             "shrink2": 1.0, "covnorm": True,
         },
         "tagfex": {
             "optimizer": "SGD", "learning_rate": 0.1, "momentum": 0.9,
-            "weight_decay": 5e-4, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
+            "weight_decay": WEIGHT_DECAY, "foreach": False, "train_mb_size": TRAIN_MB_SIZE,
             "eval_mb_size": EVAL_MB_SIZE, "num_workers": 0, "epochs_per_experience": EPOCH,
             "memory_size": 2000, "contrast_factor": 1.0,
             "contrast_kd_factor": 2.0, "aux_factor": 2.0,
@@ -176,9 +177,9 @@ FINAL_HYPERPARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
             "infonce_temp": 0.2, "infonce_kd_temp": 0.2, "kd_temp": 2.0,
             "proj_hidden_dim": 2048, "proj_output_dim": 1024,
             "interpolation_factor": 0.95, "attention_heads": 8,
-            "init_epochs": 60, "inc_epochs": 40,
+            "init_epochs": EPOCH, "inc_epochs": EPOCH,
             "init_lr": 0.1, "inc_lr": 0.1,
-            "init_weight_decay": 5e-4, "inc_weight_decay": 2e-4,
+            "init_weight_decay": WEIGHT_DECAY, "inc_weight_decay": WEIGHT_DECAY,
             "init_milestones": (60, 120, 170),
             "inc_milestones": (80, 120, 150), "gamma": 0.1,
         },

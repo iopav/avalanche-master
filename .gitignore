@@ -16,6 +16,8 @@ __pycache__/
 .coverage
 .coverage.*
 .venv/
+.venv-arrhenius-gpu/
+.miniforge-arrhenius/
 venv/
 env/
 build/

@@ -162,6 +162,12 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
             if method == "tagfex":
                 parameters["init_lr"] = float(lr)
                 parameters["inc_lr"] = float(lr)
+            print(
+                "SEARCH_START "
+                f"dataset={dataset} method={method} order={order_id} "
+                f"seed={seed} lr={lr:.8g}",
+                flush=True,
+            )
             summary_path = run_experiment(
                 project_root=project_root, dataset_root=dataset_root,
                 result_root=search_root, dataset_name=dataset, method=method,
@@ -182,6 +188,13 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
             paths.config.unlink(missing_ok=True)
             payload["candidates"][key] = _record(summary_path, paths.accuracy_matrix, checkpoint)
             atomic_write_json(path, payload)
+            print(
+                "SEARCH_COMPLETE "
+                f"dataset={dataset} method={method} order={order_id} "
+                f"seed={seed} lr={lr:.8g} "
+                f"loss={payload['candidates'][key]['selection_loss']:.6f}",
+                flush=True,
+            )
         except BaseException as exc:
             payload["candidates"][key] = {"status": STATUS_FAILED, "error_type": type(exc).__name__, "error_message": str(exc), "traceback": traceback.format_exc()}
             atomic_write_json(path, payload)
@@ -207,6 +220,12 @@ def run_search_unit(*, project_root: Path, dataset_root: Path, search_root: Path
     )
     atomic_write_json(path, payload)
     validate_search_unit(payload)
+    print(
+        "SEARCH_SELECTED "
+        f"dataset={dataset} method={method} order={order_id} seed={seed} "
+        f"lr={best_lr:.8g} loss={float(selected['selection_loss']):.6f}",
+        flush=True,
+    )
     return path
 
 
