@@ -189,6 +189,8 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
 
     try:
         for dataset in SMOKE_DATASETS:
+            dataset_search_root = search_root / dataset
+            dataset_joint_root = joint_root / dataset
             for method in SMOKE_METHODS:
                 overrides = _parameter_overrides(method)
                 for order_id in SMOKE_ORDER_IDS:
@@ -205,7 +207,7 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
                         search_path = run_search_unit(
                             project_root=Path(__file__).resolve().parents[1],
                             dataset_root=toy_root,
-                            search_root=search_root,
+                            search_root=dataset_search_root,
                             exp_name=exp_name,
                             dataset=dataset,
                             method=method,
@@ -220,8 +222,8 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
                         )
                         run_joint_unit(
                             dataset_root=toy_root,
-                            search_root=search_root,
-                            joint_root=joint_root,
+                            search_root=dataset_search_root,
+                            joint_root=dataset_joint_root,
                             exp_name=exp_name,
                             dataset=dataset,
                             method=method,
@@ -242,8 +244,8 @@ def run_smoke(output_root: Path, *, device_name: str, exp_name: str) -> Path:
                         atomic_write_json(manifest_path, manifest)
 
             reports = write_dataset_reports(
-                search_root,
-                joint_root,
+                dataset_search_root,
+                dataset_joint_root,
                 dataset=dataset,
                 methods=SMOKE_METHODS,
                 order_ids=SMOKE_ORDER_IDS,
