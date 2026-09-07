@@ -7,9 +7,22 @@ gives the class order; the group lengths give the task split.
 from __future__ import annotations
 
 
-SEEDS = (63, 65, 67, 69, 71)
-SEARCH_SEED = SEEDS[0]
-FORMAL_SEEDS = SEEDS[1:]
+
+SEEDS_BY_DATASET: dict[str, tuple[int, ...]] = {
+    "spike": (63, 65, 67, 69, 71),
+    "texture": (52,53,54,55,56),
+    "uwave": (48,50,52,54,56)
+}
+
+
+def get_search_seed(dataset: str) -> int:
+    """Seed used by the legacy single-seed search path."""
+    return SEEDS_BY_DATASET[dataset][0]
+
+
+def get_formal_seeds(dataset: str) -> tuple[int, ...]:
+    """Held-out seeds used by the legacy formal path."""
+    return SEEDS_BY_DATASET[dataset][1:]
 
 ORDERS_BY_DATASET: dict[str, dict[int, tuple[tuple[int, ...], ...]]] = {
     "spike": {

@@ -22,7 +22,7 @@ from .flops import (
 from .intransigence import fill_from_joint_run
 from .lr_search import search_unit_path
 from .models import BACKBONES, build_feature_extractor
-from .order_seed_registry import ORDERS_BY_DATASET, SEEDS
+from .order_seed_registry import ORDERS_BY_DATASET, SEEDS_BY_DATASET
 from .output import atomic_write_json
 from .registry import DATASETS
 from .runner import _evaluate_experience, _sync, set_determinism
@@ -515,5 +515,5 @@ def run_method_joint(
             backbone=backbone,
         )
         for order_id in sorted(ORDERS_BY_DATASET[dataset])
-        for seed in SEEDS
+        for seed in SEEDS_BY_DATASET[dataset]
     ]

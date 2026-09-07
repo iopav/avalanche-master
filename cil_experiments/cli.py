@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 from .models import BACKBONES
-from .order_seed_registry import FORMAL_SEEDS
+from .order_seed_registry import get_formal_seeds
 from .registry import DEFAULT_BACKBONE_ID, FORMAL_METHODS, ORDERS_BY_DATASET
 from .runner import run_experiment
 
@@ -35,7 +35,7 @@ def run_dataset_cli(dataset_name: str) -> int:
         "--order-ids", nargs="+", type=int,
         default=list(sorted(ORDERS_BY_DATASET[dataset_name])),
     )
-    parser.add_argument("--seeds", nargs="+", type=int, default=list(FORMAL_SEEDS))
+    parser.add_argument("--seeds", nargs="+", type=int, default=list(get_formal_seeds(dataset_name)))
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--dataset-root", type=Path)

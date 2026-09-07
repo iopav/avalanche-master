@@ -11,7 +11,7 @@ import torch
 from .checkpointing import promote_search_checkpoint
 from .final_hyperparameters import get_final_hyperparameters
 from .metrics import validate_summary
-from .order_seed_registry import ORDERS_BY_DATASET, SEEDS
+from .order_seed_registry import ORDERS_BY_DATASET, SEEDS_BY_DATASET
 from .output import atomic_write_json, run_artifact_paths
 from .runner import run_experiment
 from .search_config import LR_CANDIDATES
@@ -292,5 +292,5 @@ def run_method_search(*, project_root: Path, dataset_root: Path, search_root: Pa
             exp_name=exp_name, dataset=dataset, method=method, order_id=order_id,
             seed=seed, device=device, backbone=backbone, loss_selection=loss_selection,
         )
-        for order_id in sorted(ORDERS_BY_DATASET[dataset]) for seed in SEEDS
+        for order_id in sorted(ORDERS_BY_DATASET[dataset]) for seed in SEEDS_BY_DATASET[dataset]
     ]

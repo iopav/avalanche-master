@@ -30,14 +30,14 @@ from .intransigence import (
 )
 from .metrics import compute_cil_metrics, validate_summary
 from .models import BACKBONES
-from .order_seed_registry import SEARCH_SEED
+from .order_seed_registry import get_search_seed
 from .output import AtomicRunArtifacts, completed_summary_path
 from .registry import (
     DATASETS,
     DEFAULT_BACKBONES,
     METHODS,
     ORDERS_BY_DATASET,
-    SEEDS,
+    SEEDS_BY_DATASET,
     TRAINING_DEFAULTS,
     dataset_dict,
     get_task_groups,
@@ -356,7 +356,7 @@ def make_config(
             str(key): [list(group) for group in groups]
             for key, groups in ORDERS_BY_DATASET[dataset_name].items()
         },
-        "seeds": list(SEEDS),
+        "seeds": list(SEEDS_BY_DATASET[dataset_name]),
         "final_hyperparameters": {
             "source": "cil_experiments/final_hyperparameters.py",
             "registry_locked": is_final_hyperparameters_locked(method),
@@ -907,7 +907,7 @@ def evaluate_joint_checkpoint(
         "dataset": dataset_name,
         "method": source_method,
         "order_id": int(order_id),
-        "seed": SEARCH_SEED,
+        "seed": get_search_seed(dataset_name),
         "exp_name": exp_name,
         "backbone_id": metadata.get("backbone_id"),
         "input_view_id": data.input_view_id,

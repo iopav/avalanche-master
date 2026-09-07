@@ -19,7 +19,7 @@ joint_learning.run_method_joint(method)
 
 ## 2. 一个 order-seed 搜索单元
 
-`lr_search.run_method_search()` 按 `order_seed_registry.ORDERS_BY_DATASET[dataset]` 和 `SEEDS=(62,63,64,65,66)` 遍历，并调用 `run_search_unit()`。后者对应一个固定的 dataset、method、order 和 seed，由 `search_schema.new_order_seed_search()` 构造状态 JSON，读取 `final_hyperparameters.get_final_hyperparameters()` 得到正式参数，再对 `search_config.LR_CANDIDATES` 中三个 LR 逐个运行。完成状态由 `search_schema.validate_order_seed_search()` 检查。
+`lr_search.run_method_search()` 按 `order_seed_registry.ORDERS_BY_DATASET[dataset]` 和 `SEEDS_BY_DATASET[dataset]` 遍历，并调用 `run_search_unit()`。后者对应一个固定的 dataset、method、order 和 seed，由 `search_schema.new_order_seed_search()` 构造状态 JSON，读取 `final_hyperparameters.get_final_hyperparameters()` 得到正式参数，再对 `search_config.LR_CANDIDATES` 中三个 LR 逐个运行。完成状态由 `search_schema.validate_order_seed_search()` 检查。
 
 每个候选调用：
 

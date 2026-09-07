@@ -14,7 +14,7 @@ from .intransigence import _artifact_paths
 from .joint_learning import joint_run_path, validate_joint_result
 from .lr_search import search_unit_path, validate_search_unit
 from .metrics import validate_summary
-from .order_seed_registry import FORMAL_SEEDS, SEEDS
+from .order_seed_registry import SEEDS_BY_DATASET, get_formal_seeds
 from .output import atomic_write_text, completed_summary_path, json_text
 from .registry import DATASETS, FORMAL_METHODS, ORDERS_BY_DATASET
 from .search_schema import STATUS_COMPLETED, search_result_path
@@ -56,9 +56,13 @@ def aggregate_results(
     *,
     datasets: tuple[str, ...],
     methods: tuple[str, ...],
-    seeds: tuple[int, ...],
+    seeds: tuple[int, ...] | None = None,
     exp_name: str,
 ) -> dict[str, Any]:
+    seeds_by_dataset = {
+        dataset: get_formal_seeds(dataset) if seeds is None else tuple(seeds)
+        for dataset in datasets
+    }
     records: dict[tuple[str, str, str, int, int], dict[str, Any]] = {}
     observed_dataset_methods: set[tuple[str, str]] = set()
     for summary_path in result_root.glob("*/*/summary/*__summary.json"):
@@ -74,7 +78,7 @@ def aggregate_results(
             dataset not in datasets
             or method not in methods
             or order_id not in ORDERS_BY_DATASET[dataset]
-            or seed not in seeds
+            or seed not in seeds_by_dataset[dataset]
         ):
             continue
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -112,7 +116,7 @@ def aggregate_results(
         expected_pairs = {
             (order_id, seed)
             for order_id in ORDERS_BY_DATASET[dataset]
-            for seed in seeds
+            for seed in seeds_by_dataset[dataset]
         }
         actual_pairs = {(order_id, seed) for order_id, seed, _ in values}
         if actual_pairs != expected_pairs:
@@ -157,7 +161,7 @@ def aggregate_results(
         "order_ids_by_dataset": {
             dataset: sorted(ORDERS_BY_DATASET[dataset]) for dataset in datasets
         },
-        "seeds": list(seeds),
+        "seeds_by_dataset": {key: list(value) for key, value in seeds_by_dataset.items()},
         "groups": output_groups,
     }
 
@@ -192,7 +196,7 @@ def _markdown_text(payload: dict[str, Any]) -> str:
         "",
         f"Experiment: `{payload['exp_name']}`.",
         "",
-        f"Orders: `{payload['order_ids_by_dataset']}`; seeds: `{payload['seeds']}`.",
+        f"Orders: `{payload['order_ids_by_dataset']}`; seeds: `{payload['seeds_by_dataset']}`.",
         "",
         "| Dataset | Method | Backbone | n | Final ACC mean ± std | AIA mean ± std | Forgetting mean ± std |",
         "|---|---|---|---:|---:|---:|---:|",
@@ -404,10 +408,11 @@ def build_dataset_search_summary(
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
     order_ids: tuple[int, ...] | None = None,
-    seeds: tuple[int, ...] = SEEDS,
+    seeds: tuple[int, ...] | None = None,
 ) -> str:
     """Return one unaggregated row per learning-rate search candidate."""
 
+    seeds = SEEDS_BY_DATASET[dataset] if seeds is None else tuple(seeds)
     selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
     rows: list[dict[str, Any]] = []
     expected = 0
@@ -480,10 +485,11 @@ def build_dataset_joint_learning(
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
     order_ids: tuple[int, ...] | None = None,
-    seeds: tuple[int, ...] = SEEDS,
+    seeds: tuple[int, ...] | None = None,
 ) -> str:
     """Return one unaggregated row per from-scratch joint-learning run."""
 
+    seeds = SEEDS_BY_DATASET[dataset] if seeds is None else tuple(seeds)
     selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
     task_count = len(next(iter(ORDERS_BY_DATASET[dataset].values())))
     rows: list[dict[str, Any]] = []
@@ -562,7 +568,7 @@ def write_dataset_reports(
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
     order_ids: tuple[int, ...] | None = None,
-    seeds: tuple[int, ...] = SEEDS,
+    seeds: tuple[int, ...] | None = None,
 ) -> tuple[Path, Path]:
     search_path = (
         Path(search_root) / "aggregate_results" / f"{dataset}_search_summary.csv"
@@ -599,8 +605,9 @@ def _formal_summaries(
     dataset: str,
     method: str,
     order_id: int,
-    seeds: tuple[int, ...] = FORMAL_SEEDS,
+    seeds: tuple[int, ...] | None = None,
 ) -> list[dict[str, Any]]:
+    seeds = get_formal_seeds(dataset) if seeds is None else tuple(seeds)
     summaries = []
     for seed in seeds:
         path = completed_summary_path(
@@ -745,7 +752,7 @@ def build_joint_test_report(
     for dataset in DATASETS:
         for order_id in sorted(ORDERS_BY_DATASET[dataset]):
             for summary in _formal_summaries(
-                result_root, exp_name, dataset, "joint", order_id, SEEDS
+                result_root, exp_name, dataset, "joint", order_id, SEEDS_BY_DATASET[dataset]
             ):
                 row = {
                     "method": "joint",
@@ -792,7 +799,7 @@ def write_formal_aggregate(
     *,
     datasets: tuple[str, ...],
     methods: tuple[str, ...],
-    seeds: tuple[int, ...],
+    seeds: tuple[int, ...] | None = None,
     exp_name: str,
 ) -> tuple[Path, Path, Path]:
     payload = aggregate_results(
@@ -824,14 +831,14 @@ def main() -> None:
     parser.add_argument("--output-prefix", type=Path)
     parser.add_argument("--datasets", nargs="+", choices=sorted(DATASETS), default=list(DATASETS))
     parser.add_argument("--methods", nargs="+", choices=list(FORMAL_METHODS), default=list(FORMAL_METHODS))
-    parser.add_argument("--seeds", nargs="+", type=int, default=list(FORMAL_SEEDS))
+    parser.add_argument("--seeds", nargs="+", type=int, default=None)
     args = parser.parse_args()
     result_root = args.result_root.resolve()
     payload = aggregate_results(
         result_root,
         datasets=tuple(args.datasets),
         methods=tuple(args.methods),
-        seeds=tuple(args.seeds),
+        seeds=None if args.seeds is None else tuple(args.seeds),
         exp_name=args.exp_name,
     )
     prefix = (args.output_prefix or result_root / "formal_aggregate").resolve()

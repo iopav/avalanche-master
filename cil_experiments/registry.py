@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .order_seed_registry import ORDERS_BY_DATASET, SEEDS
+from .order_seed_registry import ORDERS_BY_DATASET, SEEDS_BY_DATASET
 
 
 @dataclass(frozen=True)
