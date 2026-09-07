@@ -406,10 +406,11 @@ def build_dataset_search_summary(
     order_ids: tuple[int, ...] | None = None,
     seeds: tuple[int, ...] = SEEDS,
 ) -> str:
-    """Return one unaggregated row per method/order/seed search unit."""
+    """Return one unaggregated row per learning-rate search candidate."""
 
     selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
     rows: list[dict[str, Any]] = []
+    expected = 0
     for method in methods:
         for order_id in selected_orders:
             for seed in seeds:
@@ -436,32 +437,38 @@ def build_dataset_search_summary(
                     order_id=order_id,
                     seed=seed,
                 )
-                summary_path = Path(search["best_summary_file"])
-                if not summary_path.is_file():
-                    raise FileNotFoundError(summary_path)
-                summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                validate_summary(summary)
-                row: dict[str, Any] = {
-                    "exp_name": search["exp_name"],
-                    "method": method,
-                    "dataset": dataset,
-                    "order": int(order_id),
-                    "seed": int(seed),
-                    "backbone": search["backbone"],
-                    "lr_candidates": json.dumps(
-                        search["lr_candidates"], separators=(",", ":")
-                    ),
-                    "loss_selection": search["loss_selection"],
-                    "best_lr": search["best_lr"],
-                    "best_loss": search["best_loss"],
-                    "total_search_flops": search["total_search_flops"],
-                    "storage_bytes": search["storage_bytes"],
-                    "tasks": summary["tasks"],
-                    "selection_loss_eval_flops": summary["selection"]["loss_eval_flops"],
-                }
-                row.update(_selected_metrics(summary, SUMMARY_CSV_METRICS))
-                rows.append(row)
-    expected = len(methods) * len(selected_orders) * len(seeds)
+                expected += len(search["lr_candidates"])
+                for learning_rate in search["lr_candidates"]:
+                    candidate = search["candidates"][str(learning_rate)]
+                    summary_path = Path(candidate["summary_file"])
+                    if not summary_path.is_file():
+                        raise FileNotFoundError(summary_path)
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    validate_summary(summary, allow_pending_intransigence=True)
+                    row: dict[str, Any] = {
+                        "exp_name": search["exp_name"],
+                        "method": method,
+                        "dataset": dataset,
+                        "order": int(order_id),
+                        "seed": int(seed),
+                        "backbone": search["backbone"],
+                        "lr": float(learning_rate),
+                        "lr_candidates": json.dumps(
+                            search["lr_candidates"], separators=(",", ":")
+                        ),
+                        "loss_selection": search["loss_selection"],
+                        "selection_loss": float(candidate["selection_loss"]),
+                        "best_lr": search["best_lr"],
+                        "best_loss": search["best_loss"],
+                        "total_search_flops": search["total_search_flops"],
+                        "storage_bytes": int(candidate["storage_bytes"]),
+                        "tasks": summary["tasks"],
+                        "selection_loss_eval_flops": int(
+                            candidate["selection_loss_eval_flops"]
+                        ),
+                    }
+                    row.update(_selected_metrics(summary, SUMMARY_CSV_METRICS))
+                    rows.append(row)
     if len(rows) != expected:
         raise RuntimeError(f"Expected {expected} search rows, found {len(rows)}")
     return _rows_csv(rows)
