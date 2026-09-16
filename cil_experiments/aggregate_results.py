@@ -411,7 +411,7 @@ def build_dataset_search_summary(
     order_ids: tuple[int, ...] | None = None,
     seeds: tuple[int, ...] | None = None,
 ) -> str:
-    """Report every candidate; compute intransigence only for best_lr with its joint run."""
+    """Compare all candidates with best_lr's joint run; link it only on the best row."""
 
     seeds = SEEDS_BY_DATASET[dataset] if seeds is None else tuple(seeds)
     selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
@@ -489,22 +489,21 @@ def build_dataset_search_summary(
                         ),
                     }
                     row.update(_selected_metrics(summary, SUMMARY_CSV_METRICS))
-                    row["intransigence"] = ""
-                    row["intransigence_mean"] = ""
-                    row["intransigence_reference_lr"] = ""
+                    # All LRs within this method/order/seed share the selected
+                    # joint reference. Only its matching LR row carries the link.
+                    matrix = json.loads(
+                        Path(candidate["accuracy_matrix_file"]).read_text(encoding="utf-8")
+                    )
+                    if matrix.get("tasks") != summary["tasks"]:
+                        raise ValueError(f"Candidate matrix/summary task count mismatch: {summary_path}")
+                    values = compute_intransigence(matrix, joint)
+                    if not values or not all(math.isfinite(value) for value in values):
+                        raise ValueError(f"Invalid candidate intransigence: {summary_path}")
+                    row["intransigence"] = json.dumps(values, separators=(",", ":"))
+                    row["intransigence_mean"] = statistics.mean(values)
+                    row["intransigence_reference_lr"] = joint["best_lr"]
                     row["intransigence_reference_file"] = ""
                     if float(learning_rate) == float(search["best_lr"]):
-                        matrix = json.loads(
-                            Path(candidate["accuracy_matrix_file"]).read_text(encoding="utf-8")
-                        )
-                        if matrix.get("tasks") != summary["tasks"]:
-                            raise ValueError(f"Candidate matrix/summary task count mismatch: {summary_path}")
-                        values = compute_intransigence(matrix, joint)
-                        if not values or not all(math.isfinite(value) for value in values):
-                            raise ValueError(f"Invalid candidate intransigence: {summary_path}")
-                        row["intransigence"] = json.dumps(values, separators=(",", ":"))
-                        row["intransigence_mean"] = statistics.mean(values)
-                        row["intransigence_reference_lr"] = joint["best_lr"]
                         row["intransigence_reference_file"] = str(joint_path)
                     rows.append(row)
     if len(rows) != expected:
