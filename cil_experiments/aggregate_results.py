@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .intransigence import _artifact_paths
+from .intransigence import _artifact_paths, compute_intransigence
 from .joint_learning import joint_run_path, validate_joint_result
 from .lr_search import search_unit_path, validate_search_unit
 from .metrics import validate_summary
@@ -405,12 +405,13 @@ def _validate_candidate_artifacts(
 def build_dataset_search_summary(
     search_root: Path,
     *,
+    joint_root: Path,
     dataset: str,
     methods: tuple[str, ...] = FORMAL_METHODS,
     order_ids: tuple[int, ...] | None = None,
     seeds: tuple[int, ...] | None = None,
 ) -> str:
-    """Return one unaggregated row per learning-rate search candidate."""
+    """Report every candidate; compute intransigence only for best_lr with its joint run."""
 
     seeds = SEEDS_BY_DATASET[dataset] if seeds is None else tuple(seeds)
     selected_orders = tuple(sorted(ORDERS_BY_DATASET[dataset])) if order_ids is None else tuple(order_ids)
@@ -442,6 +443,21 @@ def build_dataset_search_summary(
                     order_id=order_id,
                     seed=seed,
                 )
+                joint_path = joint_run_path(joint_root, dataset, method, order_id, seed)
+                joint = json.loads(joint_path.read_text(encoding="utf-8"))
+                validate_joint_result(joint)
+                differences = _identity_differences(
+                    joint,
+                    {**expected_search, "exp_name": search["exp_name"],
+                     "backbone": search["backbone"], "best_lr": search["best_lr"],
+                     "status": STATUS_COMPLETED},
+                )
+                if differences:
+                    raise ValueError(f"Search/joint identity mismatch: {differences}")
+                if joint["task_groups"] != [
+                    list(group) for group in ORDERS_BY_DATASET[dataset][order_id]
+                ]:
+                    raise ValueError(f"Joint task groups differ from the order registry: {joint_path}")
                 expected += len(search["lr_candidates"])
                 for learning_rate in search["lr_candidates"]:
                     candidate = search["candidates"][str(learning_rate)]
@@ -473,6 +489,23 @@ def build_dataset_search_summary(
                         ),
                     }
                     row.update(_selected_metrics(summary, SUMMARY_CSV_METRICS))
+                    row["intransigence"] = ""
+                    row["intransigence_mean"] = ""
+                    row["intransigence_reference_lr"] = ""
+                    row["intransigence_reference_file"] = ""
+                    if float(learning_rate) == float(search["best_lr"]):
+                        matrix = json.loads(
+                            Path(candidate["accuracy_matrix_file"]).read_text(encoding="utf-8")
+                        )
+                        if matrix.get("tasks") != summary["tasks"]:
+                            raise ValueError(f"Candidate matrix/summary task count mismatch: {summary_path}")
+                        values = compute_intransigence(matrix, joint)
+                        if not values or not all(math.isfinite(value) for value in values):
+                            raise ValueError(f"Invalid candidate intransigence: {summary_path}")
+                        row["intransigence"] = json.dumps(values, separators=(",", ":"))
+                        row["intransigence_mean"] = statistics.mean(values)
+                        row["intransigence_reference_lr"] = joint["best_lr"]
+                        row["intransigence_reference_file"] = str(joint_path)
                     rows.append(row)
     if len(rows) != expected:
         raise RuntimeError(f"Expected {expected} search rows, found {len(rows)}")
@@ -576,26 +609,23 @@ def write_dataset_reports(
     joint_path = (
         Path(joint_root) / "aggregate_results" / f"{dataset}_joint_learning.csv"
     )
-    atomic_write_text(
-        search_path,
-        build_dataset_search_summary(
-            search_root,
-            dataset=dataset,
-            methods=methods,
-            order_ids=order_ids,
-            seeds=seeds,
-        ),
+    search_text = build_dataset_search_summary(
+        search_root,
+        joint_root=joint_root,
+        dataset=dataset,
+        methods=methods,
+        order_ids=order_ids,
+        seeds=seeds,
     )
-    atomic_write_text(
-        joint_path,
-        build_dataset_joint_learning(
-            joint_root,
-            dataset=dataset,
-            methods=methods,
-            order_ids=order_ids,
-            seeds=seeds,
-        ),
+    joint_text = build_dataset_joint_learning(
+        joint_root,
+        dataset=dataset,
+        methods=methods,
+        order_ids=order_ids,
+        seeds=seeds,
     )
+    atomic_write_text(search_path, search_text)
+    atomic_write_text(joint_path, joint_text)
     return search_path, joint_path
 
 
