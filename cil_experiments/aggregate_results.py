@@ -17,7 +17,7 @@ from .metrics import validate_summary
 from .order_seed_registry import SEEDS_BY_DATASET, get_formal_seeds
 from .output import atomic_write_text, completed_summary_path, json_text
 from .registry import DATASETS, FORMAL_METHODS, ORDERS_BY_DATASET
-from .search_schema import STATUS_COMPLETED, search_result_path
+from .search_schema import STATUS_COMPLETED, search_result_path, is_nonfinite_training_failure
 
 
 SCALAR_METRICS = {
@@ -342,6 +342,8 @@ def _validate_candidate_artifacts(
         "backbone_id": search["backbone"],
     }
     for learning_rate, record in search["candidates"].items():
+        if is_nonfinite_training_failure(record):
+            continue
         for key in ("summary_file", "accuracy_matrix_file"):
             path = Path(record.get(key, ""))
             if not path.is_file():
@@ -461,6 +463,17 @@ def build_dataset_search_summary(
                 expected += len(search["lr_candidates"])
                 for learning_rate in search["lr_candidates"]:
                     candidate = search["candidates"][str(learning_rate)]
+                    if is_nonfinite_training_failure(candidate):
+                        rows.append({
+                            "exp_name": search["exp_name"], "method": method,
+                            "dataset": dataset, "order": int(order_id), "seed": int(seed),
+                            "backbone": search["backbone"], "lr": float(learning_rate),
+                            "lr_candidates": json.dumps(search["lr_candidates"], separators=(",", ":")),
+                            "loss_selection": search["loss_selection"],
+                            "best_lr": search["best_lr"], "best_loss": search["best_loss"],
+                            "total_search_flops": search["total_search_flops"],
+                        })
+                        continue
                     summary_path = Path(candidate["summary_file"])
                     if not summary_path.is_file():
                         raise FileNotFoundError(summary_path)

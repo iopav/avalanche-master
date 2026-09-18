@@ -581,7 +581,11 @@ def run_experiment(
             )
             return completed
 
-    with AtomicRunArtifacts(
+    artifact_class = AtomicRunArtifacts
+    if dataset_name == "texture" and method == "ewc":
+        from .texture_ewc_failure import TextureEWCArtifacts
+        artifact_class = TextureEWCArtifacts
+    with artifact_class(
         result_root,
         dataset_name,
         method,
@@ -656,6 +660,10 @@ def run_experiment(
             seed=seed,
         )
         bundle.strategy.plugins.append(progress)
+        if dataset_name == "texture" and method == "ewc":
+            from .texture_ewc_failure import EpochEvidence, snapshot
+            bundle.strategy.plugins.insert(-1, EpochEvidence(progress, log))
+            artifacts.snapshot = lambda: snapshot(progress, matrix, task_wall)
         for task_index, experience in enumerate(data.benchmark.train_stream):
             progress.start_task(task_index + 1, data.tasks)
             result, wall_s, gpu_ms, peak_mib = _train_experience(

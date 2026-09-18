@@ -11,6 +11,15 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 
 
+def is_nonfinite_training_failure(record: dict[str, Any]) -> bool:
+    """Recognize both historical and new runner loss failures, not arbitrary errors."""
+    return (
+        record.get("status") == STATUS_FAILED
+        and record.get("error_type") == "FloatingPointError"
+        and str(record.get("error_message", "")).startswith("Non-finite training loss ")
+    )
+
+
 def timestamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -64,6 +73,8 @@ def validate_order_seed_search(payload: dict[str, Any]) -> None:
     if set(candidates) != {str(value) for value in learning_rates}:
         raise ValueError("Search candidate keys differ from LR candidates")
     for record in candidates.values():
+        if is_nonfinite_training_failure(record):
+            continue
         if record.get("status") != STATUS_COMPLETED:
             raise RuntimeError("A candidate is incomplete")
         for key in (
@@ -80,15 +91,23 @@ def validate_order_seed_search(payload: dict[str, Any]) -> None:
     if best_key not in candidates:
         raise ValueError("Best LR is not a registered candidate")
     selected = candidates[best_key]
+    if selected.get("status") != STATUS_COMPLETED:
+        raise ValueError("Best LR must be a successful candidate")
+    successful = {key: record for key, record in candidates.items()
+                  if record.get("status") == STATUS_COMPLETED}
     if not math.isclose(
         float(payload["best_loss"]),
         float(selected["selection_loss"]),
         abs_tol=1e-12,
     ):
         raise ValueError("Best loss differs from selected candidate")
-    if payload.get("total_search_flops") != sum(
-        record["overall_learning_flops"] for record in candidates.values()
-    ):
+    known_flops = sum(record["overall_learning_flops"] for record in successful.values())
+    if len(successful) < len(candidates):
+        if (payload.get("total_search_flops") is not None
+                or payload.get("search_flops_status") != "incomplete_failed_candidates"
+                or payload.get("search_flops_lower_bound") != known_flops):
+            raise ValueError("Failed candidates require explicitly incomplete search FLOPs")
+    elif payload.get("total_search_flops") != known_flops:
         raise ValueError("Total search FLOPs do not equal the registered candidates")
     if payload.get("storage_bytes") != selected["storage_bytes"]:
         raise ValueError("Search storage does not equal selected model parameter bytes")

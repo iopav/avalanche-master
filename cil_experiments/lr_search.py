@@ -20,6 +20,7 @@ from .search_schema import (
     STATUS_FAILED,
     STATUS_PENDING,
     new_order_seed_search,
+    is_nonfinite_training_failure,
     timestamp,
     validate_order_seed_search,
 )
@@ -155,6 +156,50 @@ def run_search_unit(
         ),
     )
     if payload["status"] == STATUS_COMPLETED:
+        # A previously selected search may still lack evidence for a failed LR.
+        # Repair that diagnostic run separately, preserving successful candidates.
+        if dataset == "texture" and method == "ewc":
+            from .texture_ewc_failure import evidence_complete
+            for lr in lr_candidates:
+                record = payload["candidates"][str(lr)]
+                identity = dict(exp_name=exp_name, dataset=dataset, method=method,
+                                order=order_id, seed=seed, lr=lr)
+                if not is_nonfinite_training_failure(record) or evidence_complete(record, identity):
+                    continue
+                if record.get("recovery_completed_summary"):
+                    raise RuntimeError("Failure replay completed successfully; inspect "
+                                       f"{record['recovery_completed_summary']} before changing the selected search")
+                import uuid
+                subdir = Path(f"order{order_id}") / f"lr{lr_token(lr)}" / "failure_recovery" / uuid.uuid4().hex
+                parameters = get_final_hyperparameters(dataset, method, parameter_overrides,
+                                                       require_locked=data_role == "formal")
+                parameters["learning_rate"] = lr
+                print(f"SEARCH_REPLAY_MISSING_EVIDENCE dataset={dataset} method={method} "
+                      f"order={order_id} seed={seed} lr={lr}", flush=True)
+                try:
+                    recovered = run_experiment(
+                        project_root=project_root, dataset_root=dataset_root,
+                        result_root=search_root, dataset_name=dataset, method=method,
+                        order_id=order_id, seed=seed, epochs=None, device=device,
+                        parameter_overrides=parameters, backbone_id=backbone,
+                        search_provenance={"hyperparameter_search_flops": 0,
+                                           "required_trials": len(lr_candidates),
+                                           "test_set_used_for_selection": False},
+                        compute_intransigence_enabled=False, exp_name=exp_name,
+                        data_role=data_role, run_subdir=subdir, measure_latency=True,
+                        loss_selection=loss_selection, include_dataset_dir=False,
+                        flat_summary=True,
+                    )
+                except FloatingPointError as exc:
+                    if not getattr(exc, "failure_manifest", None):
+                        raise
+                    record["failure_manifest"] = exc.failure_manifest
+                    atomic_write_json(path, payload)
+                else:
+                    record["recovery_completed_summary"] = str(recovered)
+                    atomic_write_json(path, payload)
+                    raise RuntimeError(f"Failure replay completed successfully; inspect {recovered}; "
+                                       "existing best selection was preserved")
         validate_search_unit(payload)
         for key in ("best_checkpoint", "best_summary_file", "best_accuracy_matrix_file"):
             if not Path(payload[key]).is_file():
@@ -190,6 +235,23 @@ def run_search_unit(
         key = str(lr)
         paths = candidate_paths(search_root, dataset, method, order_id, seed, lr)
         checkpoint = candidate_checkpoint_path(search_root, dataset, method, order_id, seed, lr)
+        previous_failure_file = None
+        if is_nonfinite_training_failure(payload["candidates"][key]):
+            skip = True
+            if dataset == "texture" and method == "ewc":
+                from .texture_ewc_failure import evidence_complete, archive_before_retry
+                identity = dict(exp_name=exp_name, dataset=dataset, method=method,
+                                order=order_id, seed=seed, lr=lr)
+                skip = evidence_complete(payload["candidates"][key], identity)
+                if not skip:
+                    previous_failure_file = archive_before_retry(
+                        paths, checkpoint, payload["candidates"][key])
+                    print(f"SEARCH_RETRY_MISSING_EVIDENCE dataset={dataset} method={method} "
+                          f"order={order_id} seed={seed} lr={lr:.8g}", flush=True)
+            if skip:
+                print(f"SEARCH_SKIP_NONFINITE dataset={dataset} method={method} "
+                      f"order={order_id} seed={seed} lr={lr:.8g}", flush=True)
+                continue
         if payload["candidates"][key].get("status") == STATUS_COMPLETED:
             _record(paths.summary, paths.accuracy_matrix, checkpoint)
             continue
@@ -237,6 +299,8 @@ def run_search_unit(
             )
             paths.config.unlink(missing_ok=True)
             payload["candidates"][key] = _record(summary_path, paths.accuracy_matrix, checkpoint)
+            if previous_failure_file:
+                payload["candidates"][key]["previous_failure_file"] = previous_failure_file
             atomic_write_json(path, payload)
             print(
                 "SEARCH_COMPLETE "
@@ -247,10 +311,33 @@ def run_search_unit(
             )
         except BaseException as exc:
             payload["candidates"][key] = {"status": STATUS_FAILED, "error_type": type(exc).__name__, "error_message": str(exc), "traceback": traceback.format_exc()}
+            if previous_failure_file:
+                payload["candidates"][key]["previous_failure_file"] = previous_failure_file
+            if getattr(exc, "failure_manifest", None):
+                payload["candidates"][key]["failure_manifest"] = exc.failure_manifest
             atomic_write_json(path, payload)
+            if is_nonfinite_training_failure(payload["candidates"][key]):
+                print(f"SEARCH_FAILED_NONFINITE dataset={dataset} method={method} "
+                      f"order={order_id} seed={seed} lr={lr:.8g}: {exc}", flush=True)
+                continue
             raise
+    successful_lrs = tuple(lr for lr in lr_candidates
+                           if payload["candidates"][str(lr)]["status"] == STATUS_COMPLETED)
+    if not successful_lrs:
+        message = (f"All LR candidates failed with non-finite training loss: "
+                   f"dataset={dataset} method={method} order={order_id} seed={seed}; "
+                   f"see {path}")
+        payload.update(status=STATUS_FAILED, failure_reason="all_candidates_nonfinite",
+                       finished_at=timestamp(), best_lr=None, best_loss=None,
+                       best_checkpoint=None, best_summary_file=None,
+                       best_accuracy_matrix_file=None, total_search_flops=None,
+                       search_flops_status="incomplete_failed_candidates",
+                       search_flops_lower_bound=0)
+        atomic_write_json(path, payload)
+        print(f"SEARCH_ALL_FAILED {message}", flush=True)
+        raise RuntimeError(message)
     best_lr = min(
-        lr_candidates,
+        successful_lrs,
         key=lambda value: (
             payload["candidates"][str(value)]["selection_loss"],
             lr_candidates.index(value),
@@ -270,10 +357,16 @@ def run_search_unit(
         best_lr=float(best_lr), best_loss=float(selected["selection_loss"]),
         best_checkpoint=str(destination.resolve()), best_summary_file=selected["summary_file"],
         best_accuracy_matrix_file=selected["accuracy_matrix_file"],
-        total_search_flops=sum(int(record["overall_learning_flops"]) for record in payload["candidates"].values()),
+        total_search_flops=sum(int(payload["candidates"][str(lr)]["overall_learning_flops"])
+                               for lr in successful_lrs),
         storage_bytes=int(selected["storage_bytes"]), status=STATUS_COMPLETED,
         finished_at=timestamp(),
     )
+    if len(successful_lrs) < len(lr_candidates):
+        # Failed runs consumed compute, but no complete accounting was committed.
+        payload["search_flops_lower_bound"] = payload["total_search_flops"]
+        payload["total_search_flops"] = None
+        payload["search_flops_status"] = "incomplete_failed_candidates"
     atomic_write_json(path, payload)
     validate_search_unit(payload)
     print(
