@@ -6,6 +6,12 @@
 .DS_Store
 Thumbs.db
 
+# Local notes, instructions, memory and change logs; keep README documents.
+*.[mM][dD]
+*.[mM][aA][rR][kK][dD][oO][wW][nN]
+![Rr][Ee][Aa][Dd][Mm][Ee]*.[mM][dD]
+![Rr][Ee][Aa][Dd][Mm][Ee]*.[mM][aA][rR][kK][dD][oO][wW][nN]
+
 # Python caches, environments, coverage and build products
 __pycache__/
 *.py[cod]
