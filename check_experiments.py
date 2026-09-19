@@ -134,9 +134,11 @@ def candidate_check(folder, stem, record, expected, groups):
     require(Path(record["summary_file"]).resolve() == summary_path.resolve(), "Summary path mismatch")
     require(Path(record["accuracy_matrix_file"]).resolve() == matrix_path.resolve(), "Matrix path mismatch")
     summary = read_json(summary_path)
-    config = read_json(folder / (stem + "__config.json"))
+    # lr_search.run_search_unit deletes paths.config after a successful run.
+    # The retained, authoritative configuration is embedded in the summary.
+    config = summary["config"]
+    require(isinstance(config, dict), "Missing/invalid embedded summary config")
     nonempty(folder / "log" / (stem + ".log"))
-    require(summary["config"] == config, "Summary/config mismatch")
     identity(summary, {"exp_name": expected["exp_name"], "method": expected["method"], "seed": expected["seed"], "tasks": len(groups)})
     identity(config, {"exp_name": expected["exp_name"], "method": expected["method"]})
     require(config["dataset"]["name"] == expected["dataset"], "Config dataset mismatch")

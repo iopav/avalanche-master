@@ -26,6 +26,10 @@ and CRC, joint task coverage and reference identity, and aggregate CSV row
 coverage/duplicates. Texture/EWC nonfinite failures require their hashed failure
 evidence. Failed candidates do not need successful summaries or checkpoints.
 Only the selected checkpoint is required: the pipeline deletes other checkpoints.
+Successful candidate configuration is read from the summary's `config` field.
+The standalone `__config.json` is not required: `lr_search.py` explicitly deletes
+it after training. Texture/EWC failure evidence still requires its separate
+`failed_runs/<attempt>/config.json`, as listed in its manifest.
 
 The default audit requires `<dataset>_search_summary.csv` and
 `<dataset>_joint_learning.csv`. `--skip-reports` restricts the audit to raw results;
