@@ -1,4 +1,4 @@
-"""Read-only PP2 search/joint/artifact audit; prints all findings, writes no files.
+"""Read-only PP2 audit; prints ERROR details and final counts, writes no files.
 
 Run on the original experiment machine: stored absolute paths must still resolve.
 Exit 0: complete and successful; 1: missing/invalid/pending; 2: CLI error;
@@ -320,6 +320,8 @@ def main(argv=None):
         audit_experiment(audit, root, dataset, exp, registry, config["PIPELINE_METHODS"],
                          config["LR_CANDIDATES"], not args.skip_reports)
         for row in audit.rows[start:]:
+            if row["status"] != "ERROR":
+                continue
             context = " ".join(f"{key}={row[key]}" for key in
                                ("dataset", "exp_name", "method", "order", "seed", "lr")
                                if row[key] != "")

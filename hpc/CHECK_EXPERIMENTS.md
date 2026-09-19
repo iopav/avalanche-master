@@ -9,8 +9,9 @@ python3 check_experiments.py \
 ```
 
 From another directory, use the absolute script path. The project root defaults
-to the script directory; `--project-root` overrides it. All check results, paths,
-errors and final counts are printed to the terminal. No output files are written.
+to the script directory; `--project-root` overrides it. Only ERROR details (paths
+and reasons) and summary counts/verdicts are printed. OK and FAILED check details
+are suppressed; failed-candidate counts remain visible. No output files are written.
 Existing reports and experiment artifacts are never modified. Experiment names are
 explicit: there is no prefix-based dataset inference.
 
@@ -46,7 +47,7 @@ Exit codes / final verdict:
 | 2 | CLI error | Invalid arguments |
 | 3 | COMPLETE_WITH_FAILED_CANDIDATES | Files passed, but some LR candidates failed |
 
-Look for `[ERROR]` and `[FAILED]` in terminal output. Each check prints the
+Look for `[ERROR]` in terminal output. Each error prints the
 dataset, method, order, seed, LR, path and failure reason when applicable.
 There can be several checks per run; counts are check counts, not experiment
 counts. An all-failed search is
