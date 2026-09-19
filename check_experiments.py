@@ -18,6 +18,18 @@ from pathlib import Path
 import runpy
 import re
 import zipfile
+from functools import lru_cache
+
+
+@lru_cache(maxsize=None)
+def method_display_name(method):
+    # Read the same registry used by runner.py without importing training code.
+    path = Path(__file__).resolve().parent / "cil_experiments" / "registry.py"
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "METHODS":
+            return ast.literal_eval(node.value)[method]["display_name"]
+    raise ValueError("METHODS registry is missing")
 
 
 def schema_keys(root):
@@ -139,7 +151,7 @@ def candidate_check(folder, stem, record, expected, groups):
     config = summary["config"]
     require(isinstance(config, dict), "Missing/invalid embedded summary config")
     nonempty(folder / "log" / (stem + ".log"))
-    identity(summary, {"exp_name": expected["exp_name"], "method": expected["method"], "seed": expected["seed"], "tasks": len(groups)})
+    identity(summary, {"exp_name": expected["exp_name"], "method": method_display_name(expected["method"]), "seed": expected["seed"], "tasks": len(groups)})
     identity(config, {"exp_name": expected["exp_name"], "method": expected["method"]})
     require(config["dataset"]["name"] == expected["dataset"], "Config dataset mismatch")
     require(config["selected_task_groups"] == groups, "Config task groups mismatch")
