@@ -5,14 +5,13 @@ packages needed):
 
 ```bash
 python3 check_experiments.py \
-  --experiments spike=spike-all texture=texture-all uwave=uwave-all \
-  --output experiment_audit.csv
+  --experiments spike=spike-all texture=texture-all uwave=uwave-all
 ```
 
 From another directory, use the absolute script path. The project root defaults
-to the script directory; `--project-root` overrides it. The output is relative
-to the current working directory and must be a new CSV filename. Existing
-reports and experiment artifacts are never overwritten. Experiment names are
+to the script directory; `--project-root` overrides it. All check results, paths,
+errors and final counts are printed to the terminal. No output files are written.
+Existing reports and experiment artifacts are never modified. Experiment names are
 explicit: there is no prefix-based dataset inference.
 
 The expected methods, LRs, seeds and orders come from the checkout's
@@ -40,12 +39,13 @@ Exit codes / final verdict:
 |---|---|---|
 | 0 | ALL_SUCCESSFUL | All expected audited artifacts passed, no failed candidates |
 | 1 | INCOMPLETE_OR_INVALID | Missing, pending, inconsistent or corrupt artifacts |
-| 2 | CLI error | Invalid arguments/output filename |
+| 2 | CLI error | Invalid arguments |
 | 3 | COMPLETE_WITH_FAILED_CANDIDATES | Files passed, but some LR candidates failed |
 
-Filter report `status != OK` and use `dataset, method, order, seed, lr, kind,
-path, detail` to locate issues. There can be several audit rows per run; report
-row counts are check counts, not experiment counts. An all-failed search is
+Look for `[ERROR]` and `[FAILED]` in terminal output. Each check prints the
+dataset, method, order, seed, LR, path and failure reason when applicable.
+There can be several checks per run; counts are check counts, not experiment
+counts. An all-failed search is
 incomplete, because it has no selected model or usable downstream joint result.
 
 This is an artifact consistency audit, not proof of benchmark quality or model

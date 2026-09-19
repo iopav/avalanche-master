@@ -1,4 +1,4 @@
-"""Read-only PP2 search/joint/artifact audit (Python standard library only).
+"""Read-only PP2 search/joint/artifact audit; prints all findings, writes no files.
 
 Run on the original experiment machine: stored absolute paths must still resolve.
 Exit 0: complete and successful; 1: missing/invalid/pending; 2: CLI error;
@@ -287,13 +287,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--experiments", nargs="+", default=["spike=spike-all", "texture=texture-all", "uwave=uwave-all"], metavar="DATASET=EXP_NAME")
-    parser.add_argument("--output", type=Path, default=Path("experiment_audit.csv"))
     parser.add_argument("--skip-reports", action="store_true", help="Audit raw search/joint artifacts only, not aggregate CSVs")
     args = parser.parse_args(argv)
     root = args.project_root.resolve()
-    output = args.output.resolve()
-    if output.suffix.lower() != ".csv" or output.exists():
-        parser.error("--output must be a new .csv file; choose another name")
     registry = runpy.run_path(str(root / "cil_experiments" / "order_seed_registry.py"))
     config = runpy.run_path(str(root / "cil_experiments" / "search_config.py"))
     experiments = []
@@ -304,24 +300,23 @@ def main(argv=None):
         experiments.append((dataset, exp))
     if len(set(experiments)) != len(experiments):
         parser.error("Duplicate experiments")
-    if any(output.is_relative_to(root / f"{prefix}_{exp}")
-           for _, exp in experiments for prefix in ("search_result", "joint_result")):
-        parser.error("Audit output must be outside experiment artifact directories")
     audit = Audit()
     for dataset, exp in experiments:
         start = len(audit.rows)
         audit_experiment(audit, root, dataset, exp, registry, config["PIPELINE_METHODS"],
                          config["LR_CANDIDATES"], not args.skip_reports)
+        for row in audit.rows[start:]:
+            context = " ".join(f"{key}={row[key]}" for key in
+                               ("dataset", "exp_name", "method", "order", "seed", "lr")
+                               if row[key] != "")
+            print(f"[{row['status']}] {context} check={row['kind']}", flush=True)
+            print(f"  path: {row['path']}")
+            if row["detail"]:
+                print(f"  reason: {row['detail']}")
         print(f"{dataset}/{exp}: {dict(Counter(r['status'] for r in audit.rows[start:]))}")
-    # Refuse to overwrite input artifacts, including when --output is mistyped.
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("x", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=["dataset", "exp_name", "method", "order", "seed", "lr", "kind", "status", "path", "detail"])
-        writer.writeheader()
-        writer.writerows(audit.rows)
     counts = Counter(row["status"] for row in audit.rows)
     verdict = "INCOMPLETE_OR_INVALID" if counts["ERROR"] else "COMPLETE_WITH_FAILED_CANDIDATES" if counts["FAILED"] else "ALL_SUCCESSFUL"
-    print(f"{verdict} counts={dict(counts)} report={output}")
+    print(f"{verdict} counts={dict(counts)}")
     print("Scope: current registry search + joint; aggregate CSV coverage unless skipped. Checkpoint ZIP/CRC only, no model reload.")
     return 1 if counts["ERROR"] else 3 if counts["FAILED"] else 0
 
