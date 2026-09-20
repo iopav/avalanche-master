@@ -1,6 +1,6 @@
 """Generate pp2-newtable Markdown tables from existing results; no training.
 
-Python 3.10+, standard library only. Output is a NEW directory (never overwrite).
+Python 3.10+, standard library only. Reports overwrite matching output files.
 For each dataset/method: four cost tables, one performance table, and two
 matrices per order. Sources are CSV + search JSON + selected matrix/joint JSON.
 """
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-from datetime import datetime
 import html
 import json
 import math
@@ -328,12 +327,12 @@ def main(argv=None):
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parent,
                         help="Root containing registries and search_result_*/joint_result_* directories")
     parser.add_argument("--experiments", nargs="+", default=["spike=spike-all", "uwave=uwave-all", "texture=texture-all"])
-    parser.add_argument("--output-dir", type=Path, help="NEW output directory; defaults to pp2_tables/TIMESTAMP under project root")
+    parser.add_argument("--output-dir", type=Path, help="Output directory; defaults to pp2_tables under project root; matching reports are overwritten")
     args = parser.parse_args(argv)
     root = args.project_root.resolve()
-    output = (args.output_dir or root / "pp2_tables" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")).resolve()
-    if output.exists():
-        parser.error("Output directory already exists; choose a new --output-dir")
+    output = (args.output_dir or root / "pp2_tables").resolve()
+    if output.exists() and not output.is_dir():
+        parser.error("Output path exists but is not a directory")
     registry = runpy.run_path(str(root / "cil_experiments/order_seed_registry.py"))
     config = runpy.run_path(str(root / "cil_experiments/search_config.py"))
     experiments = []
@@ -381,7 +380,7 @@ def main(argv=None):
     index.extend(["\n## Known failed candidates\n", *(warnings or ["None."])])
     index.append("\nSource files were read only. Missing/invalid input aborts output. Cost 1A uses the teacher-example z approximation; by-order selected-run tables use t intervals; all-LR cost CIs remain unspecified.\n")
     documents["index.md"] = "\n".join(index)
-    output.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=True)
     for relative, content in documents.items():
         path = output / relative
         path.parent.mkdir(parents=True, exist_ok=True)
