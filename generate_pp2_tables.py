@@ -283,6 +283,31 @@ def matrix_table(matrices, order, seeds, tasks):
     return table(["Training stage / Test task", *[f"Task {j+1}" for j in range(tasks)]], rows)
 
 
+def search_flops_section(root, dataset, exp, method, records, failed, orders, seeds, lrs):
+    rows = []
+    for order in orders:
+        for seed in seeds:
+            group = [r for r in records if (r["order"], r["seed"]) == (order, seed)]
+            failed_lrs = [lr for o, s, lr, _ in failed if (o, s) == (order, seed)]
+            known = math.fsum(r["overall_learning_flops"] for r in group)
+            source = read_json(root / f"search_result_{exp}" / method / f"order{order}" /
+                               f"order{order}_seed{seed:03d}_search.json")
+            if failed_lrs:
+                require(source.get("total_search_flops") is None and
+                        source.get("search_flops_status") == "incomplete_failed_candidates",
+                        "Failed candidates require explicitly incomplete search FLOPs")
+                close(source["search_flops_lower_bound"], known)
+                total = "Unknown"
+            else:
+                close(source["total_search_flops"], known)
+                total = fmt(known / 1e12)
+            rows.append([order, seed, total, fmt(known / 1e12) if failed_lrs else "—",
+                         f"{len(group)}/{len(lrs)}", ", ".join(map(str, failed_lrs)) or "—"])
+    return (f"## {dataset} / {DISPLAY.get(method, method)}\n\nExperiment: `{exp}`\n\n" +
+            table(["Order", "Seed", "Search FLOPs (×10¹²)", "Known lower bound (×10¹²)",
+                   "Completed / planned LRs", "Failed LRs"], rows))
+
+
 def pooled_matrix_section(dataset, exp, method, matrices, orders, seeds):
     task_counts = {len(groups) for groups in orders.values()}
     require(len(task_counts) == 1, "Cannot pool orders with different task counts")
@@ -407,6 +432,7 @@ def main(argv=None):
         parser.error("Duplicate experiment names")
     documents, errors, warnings = {}, [], []
     pooled_sections = []
+    search_sections = []
     for dataset, exp in experiments:
         source = root / f"search_result_{exp}/aggregate_results/{dataset}_search_summary.csv"
         try:
@@ -423,6 +449,8 @@ def main(argv=None):
             try:
                 data = load_method(root, dataset, exp, method, orders, seeds, config["LR_CANDIDATES"], rows)
                 records, failed, matrices, joints = data
+                search_sections.append(search_flops_section(root, dataset, exp, method, records,
+                                                            failed, orders, seeds, config["LR_CANDIDATES"]))
                 pooled_sections.append(pooled_matrix_section(dataset, exp, method, matrices, orders, seeds))
                 documents[f"{exp}/{method}.md"] = render(dataset, exp, method, *data, orders, seeds, config["LR_CANDIDATES"])
                 if method == "tagfex":
@@ -448,6 +476,17 @@ def main(argv=None):
         "The upper triangle is unmeasured, not zero. Missing selected matrices abort generation.\n\n"
         + "\n\n".join(pooled_sections))
     total += len(pooled_sections)
+    documents["search_flops_summary.md"] = (
+        "# Search FLOPs — all datasets and methods\n\n"
+        "Each row is one dataset/method/order/seed search. Search FLOPs sum overall_learning_flops "
+        "over all registered LR candidates, including the selected LR once; no averaging, "
+        "no additional best-LR or joint run is added. Units: ×10¹² FLOPs. "
+        "Values use the existing learning-FLOPs accounting convention, not a measurement of "
+        "all machine operations or historical retries. If a candidate failed, total cost is Unknown; "
+        "the completed-candidate sum is only a known lower bound. Failed costs are never zero-filled. "
+        "Candidate sums are checked against total_search_flops or search_flops_lower_bound in search JSON.\n\n"
+        + "\n\n".join(search_sections))
+    total += len(search_sections)
     index = [f"# PP2 tables\n\n{len(documents)} reports, {total} tables.\n",
              "Four cost variants + one performance table + incremental/joint matrices for each order; an additional selected-LR TagFex per-task FLOPs report for each dataset, and one combined report pooling all orders for each dataset/method accuracy matrix.\n"]
     index.extend(f"- [{name}]({name})" for name in documents)
