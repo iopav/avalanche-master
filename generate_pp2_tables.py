@@ -283,6 +283,67 @@ def matrix_table(matrices, order, seeds, tasks):
     return table(["Training stage / Test task", *[f"Task {j+1}" for j in range(tasks)]], rows)
 
 
+def pooled_matrix_section(dataset, exp, method, matrices, orders, seeds):
+    task_counts = {len(groups) for groups in orders.values()}
+    require(len(task_counts) == 1, "Cannot pool orders with different task counts")
+    tasks = task_counts.pop()
+    pairs = [(o, s) for o in orders for s in seeds]
+    require(set(matrices) == set(pairs), "Selected matrix order/seed coverage mismatch")
+    rows = [[f"After task {i+1}", *[
+        cell([matrices[pair][i][j] * 100 for pair in pairs], "none") if j <= i else "—"
+        for j in range(tasks)]] for i in range(tasks)]
+    return (f"## {dataset} / {DISPLAY.get(method, method)}\n\n"
+            f"Experiment: `{exp}`; orders: `{list(orders)}`; seeds: `{list(seeds)}`; "
+            f"n={len(pairs)} selected runs per cell.\n\n"
+            + table(["Training stage / Test task position", *[f"Task {j+1}" for j in range(tasks)]], rows))
+
+
+def tagfex_task_report(root, dataset, exp, records, orders, seeds):
+    source = root / f"search_result_{exp}/aggregate_results/tagfex_task_flops.csv"
+    selected = {(r["order"], r["seed"]): r for r in records if r["lr"] == r["best_lr"]}
+    indexed = {}
+    fields = ("task_learning_flops", "core_training_flops", "learning_auxiliary_flops")
+    with source.open(encoding="utf-8-sig", newline="") as stream:
+        for row in csv.DictReader(stream):
+            identity(row, dict(exp_name=exp, dataset=dataset, method="tagfex"))
+            pair = (int(row["order"]), int(row["seed"]))
+            require(pair in selected, f"Unexpected per-task order/seed: {pair}")
+            if number(row["lr"]) != selected[pair]["best_lr"]:
+                continue
+            task = int(row["task"])
+            require(int(row["tasks"]) == len(orders[pair[0]]), "Per-task task count differs")
+            key = (*pair, task)
+            require(key not in indexed, f"Duplicate selected per-task row: {key}")
+            values = {field: number(row[field]) for field in (*fields, "cumulative_learning_flops")}
+            require(all(v >= 0 for v in values.values()), f"Negative per-task FLOPs: {key}")
+            close(values[fields[0]], values[fields[1]] + values[fields[2]])
+            indexed[key] = values
+    expected = {(o, s, t) for o in orders for s in seeds for t in range(1, len(orders[o])+1)}
+    require(set(indexed) == expected,
+            f"Selected per-task coverage mismatch: missing={sorted(expected-set(indexed))}, extra={sorted(set(indexed)-expected)}")
+    for (order, seed), record in selected.items():
+        cumulative = 0
+        for task in range(1, len(orders[order])+1):
+            cumulative += indexed[order, seed, task][fields[0]]
+            close(cumulative, indexed[order, seed, task]["cumulative_learning_flops"])
+        for field, run_field in zip(fields, ("overall_learning_flops", *fields[1:])):
+            close(sum(indexed[order, seed, t][field] for t in range(1, len(orders[order])+1)), record[run_field])
+    rows = [["—", "Valid selected runs / planned runs", *[f"{len(seeds)} / {len(seeds)}" for _ in orders]]]
+    labels = ("Task learning FLOPs", "Core training FLOPs", "Learning auxiliary FLOPs")
+    for task in range(1, max(map(len, orders.values()))+1):
+        for label, field in zip(labels, fields):
+            rows.append([task, label, *[
+                cell([indexed[o, s, task][field] / 1e12 for s in seeds], "t")
+                if task <= len(orders[o]) else "—" for o in orders]])
+    return (f"# {dataset} — TagFex per-task FLOPs（仅 best LR）\n\n"
+            f"实验：`{exp}`。每个 order、seed 只取该组 best LR；不同 seed 的 best LR 可以不同。"
+            "按 order 分列，每个任务跨 seed 统计 Mean ± sample SD [95% t CI]，单位 ×10¹² FLOPs。"
+            "这是任务本身的成本，不是累计成本，也不对相邻任务记录作差。\n\n"
+            + table(["Task", "Metric", *[f"Order {o}" for o in orders]], rows)
+            + f"\n来源：`{source}`；best LR 与运行总成本来自已校验的搜索汇总。"
+              "逐任务总和、core/auxiliary 分解及累计值均已交叉校验。\n")
+
+
 def render(dataset, exp, method, records, failed, matrices, joints, orders, seeds, lrs):
     selected = [r for r in records if r["lr"] == r["best_lr"]]
     parts = [f"# {dataset} — {DISPLAY.get(method, method)}\n",
@@ -345,6 +406,7 @@ def main(argv=None):
     if len({exp for _, exp in experiments}) != len(experiments):
         parser.error("Duplicate experiment names")
     documents, errors, warnings = {}, [], []
+    pooled_sections = []
     for dataset, exp in experiments:
         source = root / f"search_result_{exp}/aggregate_results/{dataset}_search_summary.csv"
         try:
@@ -361,7 +423,11 @@ def main(argv=None):
             try:
                 data = load_method(root, dataset, exp, method, orders, seeds, config["LR_CANDIDATES"], rows)
                 records, failed, matrices, joints = data
+                pooled_sections.append(pooled_matrix_section(dataset, exp, method, matrices, orders, seeds))
                 documents[f"{exp}/{method}.md"] = render(dataset, exp, method, *data, orders, seeds, config["LR_CANDIDATES"])
+                if method == "tagfex":
+                    documents[f"{exp}/tagfex_task_flops_bestlr.md"] = tagfex_task_report(
+                        root, dataset, exp, records, orders, seeds)
                 if failed:
                     warnings.append(f"{exp}/{method}: {len(failed)} failed candidates (excluded, never zero-filled)")
                 print(f"TABLES_VALIDATED {exp}/{method} tables={5+2*len(orders)} successful_candidates={len(records)} failed={len(failed)}", flush=True)
@@ -373,8 +439,17 @@ def main(argv=None):
         print("No output written. Fix incomplete/stale/mismatched input files and retry.")
         return 1
     total = sum((5 + 2*len(registry["ORDERS_BY_DATASET"][d])) * len(config["PIPELINE_METHODS"]) for d, _ in experiments)
+    total += len(experiments) if "tagfex" in config["PIPELINE_METHODS"] else 0
+    documents["bestlr_accuracy_matrices.md"] = (
+        "# Best-LR accuracy matrices, all orders pooled\n\n"
+        "Each dataset/method has one incremental accuracy matrix. Each order/seed uses its own best LR. "
+        "Cells pool all selected order/seed runs with equal weight: mean ± sample SD (%), without CI. "
+        "Rows and columns align by task position, not class identity: column j is the j-th task in each order. "
+        "The upper triangle is unmeasured, not zero. Missing selected matrices abort generation.\n\n"
+        + "\n\n".join(pooled_sections))
+    total += len(pooled_sections)
     index = [f"# PP2 tables\n\n{len(documents)} reports, {total} tables.\n",
-             "Four cost variants + one performance table + incremental/joint matrices for each order.\n"]
+             "Four cost variants + one performance table + incremental/joint matrices for each order; an additional selected-LR TagFex per-task FLOPs report for each dataset, and one combined report pooling all orders for each dataset/method accuracy matrix.\n"]
     index.extend(f"- [{name}]({name})" for name in documents)
     index.extend(["\n## Known failed candidates\n", *(warnings or ["None."])])
     index.append("\nSource files were read only. Missing/invalid input aborts output. Cost 1A uses the teacher-example z approximation; by-order selected-run tables use t intervals. Cost 1C/1D use 1.96 * sample SD / sqrt(n), where n is the valid candidate record count, excluding failures; candidate correlations are not adjusted.\n")
