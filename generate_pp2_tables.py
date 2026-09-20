@@ -119,8 +119,7 @@ def formatted(values, mode="none"):
     if mean is None:
         return "Missing", "Missing"
     center = f"{fmt(mean)} ± {fmt(sd)}"
-    ci = f"[{fmt(interval[0])}, {fmt(interval[1])}]" if interval else (
-        "待定口径" if mode == "pending" else "N/A")
+    ci = f"[{fmt(interval[0])}, {fmt(interval[1])}]" if interval else "N/A"
     return center, ci
 
 
@@ -295,8 +294,8 @@ def render(dataset, exp, method, records, failed, matrices, joints, orders, seed
     variants = [
         ("1A", "仅 best LR，汇总所有 order", [selected], ["z"], [len(orders)*len(seeds)], True),
         ("1B", "仅 best LR，分 order", [[r for r in selected if r["order"] == o] for o in orders], ["t"]*len(orders), [len(seeds)]*len(orders), False),
-        ("1C", "全部搜索候选，汇总所有 order", [records], ["pending"], [len(orders)*len(seeds)*len(lrs)], True),
-        ("1D", "全部搜索候选，分 order", [[r for r in records if r["order"] == o] for o in orders], ["none"]*len(orders), [len(seeds)*len(lrs)]*len(orders), False),
+        ("1C", "全部搜索候选，汇总所有 order", [records], ["z"], [len(orders)*len(seeds)*len(lrs)], True),
+        ("1D", "全部搜索候选，分 order", [[r for r in records if r["order"] == o] for o in orders], ["z"]*len(orders), [len(seeds)*len(lrs)]*len(orders), False),
     ]
     for name, title, groups, modes, planned, pooled in variants:
         parts.append(f"## 表 {name}：{title}\n")
@@ -305,7 +304,7 @@ def render(dataset, exp, method, records, failed, matrices, joints, orders, seed
     parts.append("成本表：FLOPs 缩放为 ×10¹²，持久存储按 KiB/MiB 换算。SD 为样本 SD；未单独计量的机制项保留为 Not measured。"
                  "全部候选表展示单次候选运行的成本分布，不是搜索总开销，也不包括 joint 训练成本。\n")
     parts.append("CI：表 1A 使用 1.96 × SD/√n，复现老师成本表示例的反推口径；表 1B 和表 2 使用固定 order 下的 Student-t 区间。"
-                 "表 1C/1D 的 CI 待定，不将 LR 当作独立重复。仅一个有效观测时 SD/CI 为 N/A。\n")
+                 "表 1C/1D 使用 1.96 × SD/√n，n 为有效候选记录数，失败候选不计入；按此约定计算正态近似区间，未调整候选间相关性。仅一个有效观测时 SD/CI 为 N/A。\n")
     parts.append("## 表 2：方法性能\n")
     parts.append(table(["Metric", *by_order], performance_rows(records, orders, seeds, lrs)))
     parts.append("表 2：标量为 Mean ± SD [95% CI]，逐任务列表为 Mean ± SD。百分比和百分点均已乘 100。"
@@ -378,7 +377,7 @@ def main(argv=None):
              "Four cost variants + one performance table + incremental/joint matrices for each order.\n"]
     index.extend(f"- [{name}]({name})" for name in documents)
     index.extend(["\n## Known failed candidates\n", *(warnings or ["None."])])
-    index.append("\nSource files were read only. Missing/invalid input aborts output. Cost 1A uses the teacher-example z approximation; by-order selected-run tables use t intervals; all-LR cost CIs remain unspecified.\n")
+    index.append("\nSource files were read only. Missing/invalid input aborts output. Cost 1A uses the teacher-example z approximation; by-order selected-run tables use t intervals. Cost 1C/1D use 1.96 * sample SD / sqrt(n), where n is the valid candidate record count, excluding failures; candidate correlations are not adjusted.\n")
     documents["index.md"] = "\n".join(index)
     output.mkdir(parents=True, exist_ok=True)
     for relative, content in documents.items():
