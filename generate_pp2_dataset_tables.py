@@ -20,14 +20,26 @@ def failure_cost(directory, expected, tasks):
     """Sum independently archived attempts, never infer an unfinished task cost."""
     total = 0
     notes = []
-    manifests = sorted(directory.glob("lr*/failed_runs/*/manifest.json"))
+    search_path = directory / f"order{expected['order']}_seed{expected['seed']:03d}_search.json"
+    candidates = base.read_json(search_path).get('candidates', {}) if search_path.is_file() else {}
+    referenced = {lr for lr, c in candidates.items()
+                  if c.get('status') == 'failed' and c.get('failure_manifest')}
+    found = set()
+    manifests = sorted(directory.glob("lr*/**/failed_runs/*/manifest.json"))
     for path in manifests:
         manifest = base.read_json(path)
         ident = manifest.get("identity", {})
         if ident.get("seed") != expected["seed"]:
             continue
         base.identity(ident, expected)
-        base.require(str(ident.get("lr")).replace(".", "") == path.parents[2].name[2:],
+        lr = str(ident.get('lr'))
+        if lr in referenced:
+            chosen = str(candidates[lr]['failure_manifest']).replace('\\', '/').split('/')[-2:]
+            if list(path.parts[-2:]) != chosen:
+                continue
+            base.require(lr not in found, 'Duplicate selected failure archive')
+            found.add(lr)
+        base.require(str(ident.get("lr")).replace(".", "") == path.relative_to(directory).parts[0][2:],
                      f"Failure LR/path mismatch: {path}")
         base.require(set(manifest["files"]) == {"config.json", "failure.json", "run.log"},
                      f"Invalid failure manifest: {path}")
@@ -64,6 +76,7 @@ def failure_cost(directory, expected, tasks):
                      f"失败位置 task={failure.get('partial', {}).get('task', '?')}, "
                      f"epoch={failure.get('partial', {}).get('epoch', '?')}。"
                      f"来源 `{path.relative_to(directory).as_posix()}`。")
+    base.require(found == referenced, 'Missing selected failure archive')
     return total, notes
 
 

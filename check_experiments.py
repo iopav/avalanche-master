@@ -124,8 +124,7 @@ def failure_check(record, expected):
     require(record.get("error_type") == "FloatingPointError" and
             str(record.get("error_message", "")).startswith("Non-finite training loss "),
             "Unhandled candidate failure: " + str(record.get("error_message")))
-    if expected["dataset"] != "texture" or expected["method"] != "ewc":
-        return
+    require(bool(record.get("failure_manifest")), "Missing archived failure evidence; historical cost is unknown")
     path = Path(record["failure_manifest"])
     manifest = read_json(path)
     identity(manifest["identity"], expected)

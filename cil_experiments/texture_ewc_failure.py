@@ -1,4 +1,4 @@
-"""Failure evidence for Texture/EWC only; never publishes a completed summary."""
+"""Failure evidence for every CIL method; legacy module path retained for imports."""
 from __future__ import annotations
 
 import hashlib
@@ -50,7 +50,7 @@ def archive_before_retry(paths, checkpoint, record):
     return str((folder / 'previous_search_failure.json').resolve())
 
 
-class TextureEWCArtifacts(AtomicRunArtifacts):
+class FailureEvidenceArtifacts(AtomicRunArtifacts):
     snapshot = None
 
     def __init__(self, result_root, dataset, method, order_id, seed, config, *args):
@@ -81,6 +81,9 @@ class TextureEWCArtifacts(AtomicRunArtifacts):
         finally:
             super().__exit__(exc_type, exc, tb)
         return False
+
+
+TextureEWCArtifacts = FailureEvidenceArtifacts  # Backward-compatible import.
 
 
 class EpochEvidence(SupervisedPlugin):

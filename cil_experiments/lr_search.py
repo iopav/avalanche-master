@@ -158,7 +158,7 @@ def run_search_unit(
     if payload["status"] == STATUS_COMPLETED:
         # A previously selected search may still lack evidence for a failed LR.
         # Repair that diagnostic run separately, preserving successful candidates.
-        if dataset == "texture" and method == "ewc":
+        if (dataset == "texture" and method == "ewc") or method == "er_ace":
             from .texture_ewc_failure import evidence_complete
             for lr in lr_candidates:
                 record = payload["candidates"][str(lr)]
@@ -193,7 +193,14 @@ def run_search_unit(
                 except FloatingPointError as exc:
                     if not getattr(exc, "failure_manifest", None):
                         raise
-                    record["failure_manifest"] = exc.failure_manifest
+                    replacement = dict(record, failure_manifest=exc.failure_manifest)
+                    if not evidence_complete(replacement, identity):
+                        raise RuntimeError("Failure replay did not produce valid nonfinite evidence") from exc
+                    # Replace only this failed candidate using the existing schema.
+                    record.clear()
+                    record.update(status=STATUS_FAILED, error_type=type(exc).__name__,
+                                  error_message=str(exc), traceback=traceback.format_exc(),
+                                  failure_manifest=exc.failure_manifest)
                     atomic_write_json(path, payload)
                 else:
                     record["recovery_completed_summary"] = str(recovered)
@@ -238,7 +245,7 @@ def run_search_unit(
         previous_failure_file = None
         if is_nonfinite_training_failure(payload["candidates"][key]):
             skip = True
-            if dataset == "texture" and method == "ewc":
+            if (dataset == "texture" and method == "ewc") or method == "er_ace":
                 from .texture_ewc_failure import evidence_complete, archive_before_retry
                 identity = dict(exp_name=exp_name, dataset=dataset, method=method,
                                 order=order_id, seed=seed, lr=lr)
