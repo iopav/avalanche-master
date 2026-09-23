@@ -16,7 +16,8 @@ class FailureEvidenceTests(unittest.TestCase):
             root = Path(tmp)
             selected = root/'selected.json'
             selected.write_text(json.dumps({'inference': {'final_latency_ms_per_sample': 1}}))
-            payload = dict(status='completed', best_lr=.01, best_checkpoint=str(selected),
+            payload = dict(exp_name='test', dataset='texture', method='er_ace', order=1, seed=52,
+                status='completed', best_lr=.01, best_checkpoint=str(selected),
                 best_summary_file=str(selected), best_accuracy_matrix_file=str(selected),
                 candidates={'0.1': dict(status='failed', error_type='FloatingPointError',
                     error_message='Non-finite training loss original'),
@@ -53,6 +54,25 @@ class FailureEvidenceTests(unittest.TestCase):
             # An unreferenced duplicate replay must not double the replacement.
             import shutil
             chosen = Path(saved['candidates']['0.1']['failure_manifest']).parent
+            self.assertEqual(chosen.parent, root/'er_ace/order1/lr01/failed_runs')
+            # Existing nested archives migrate without retraining or changing data.
+            from normalize_failure_layout import normalize
+            legacy = chosen.parent.parent/'failure_recovery/replay/failed_runs'/chosen.name
+            legacy.parent.mkdir(parents=True)
+            chosen.rename(legacy)
+            saved['candidates']['0.1']['failure_manifest'] = str(legacy/'manifest.json')
+            output.write_text(json.dumps(saved))
+            before = {p.name: p.read_bytes() for p in legacy.iterdir()}
+            self.assertEqual(normalize(root), (1, 0))
+            self.assertTrue(legacy.exists())
+            self.assertEqual(normalize(root, apply=True), (1, 0))
+            expected = json.loads(json.dumps(saved))
+            expected['candidates']['0.1']['failure_manifest'] = str((chosen/'manifest.json').resolve())
+            self.assertEqual(json.loads(output.read_text()), expected)
+            self.assertEqual({p.name: p.read_bytes() for p in chosen.iterdir()}, before)
+            self.assertFalse((chosen.parent.parent/'failure_recovery').exists())
+            self.assertEqual(normalize(root, apply=True), (0, 0))
+            self.assertEqual(failure_cost(directory, identity, 6)[0], 120)
             shutil.copytree(chosen, chosen.with_name('duplicate'))
             self.assertEqual(failure_cost(directory, identity, 6)[0], 120)
 

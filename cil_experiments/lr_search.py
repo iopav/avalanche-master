@@ -169,8 +169,7 @@ def run_search_unit(
                 if record.get("recovery_completed_summary"):
                     raise RuntimeError("Failure replay completed successfully; inspect "
                                        f"{record['recovery_completed_summary']} before changing the selected search")
-                import uuid
-                subdir = Path(f"order{order_id}") / f"lr{lr_token(lr)}" / "failure_recovery" / uuid.uuid4().hex
+                subdir = Path(f"order{order_id}") / f"lr{lr_token(lr)}"
                 parameters = get_final_hyperparameters(dataset, method, parameter_overrides,
                                                        require_locked=data_role == "formal")
                 parameters["learning_rate"] = lr
