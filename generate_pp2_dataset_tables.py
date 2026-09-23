@@ -64,9 +64,13 @@ def failure_cost(directory, expected, tasks):
             value = record["total_flops"]
             base.require(isinstance(value, int) and not isinstance(value, bool) and value >= 0,
                          f"Invalid failed task FLOPs: {path}")
-            base.require(set(record["phase_flops"]) == {"core_training", "learning_auxiliary"}
-                         and all(isinstance(v, int) and v >= 0 for v in record["phase_flops"].values())
-                         and value == sum(record["phase_flops"].values()),
+            # PhaseFlopProfiler omits phases whose count is zero.
+            phases = record["phase_flops"]
+            base.require(isinstance(phases, dict)
+                         and set(phases) <= {"core_training", "learning_auxiliary"}
+                         and all(isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                                 for v in phases.values())
+                         and value == sum(phases.values()),
                          f"Failure phase sum mismatch: {path}")
             completed.append(task)
             cost += value

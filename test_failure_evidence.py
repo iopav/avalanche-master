@@ -10,6 +10,32 @@ from generate_pp2_dataset_tables import failure_cost
 
 
 class FailureEvidenceTests(unittest.TestCase):
+    def test_sparse_phase_counts_and_invalid_counts(self):
+        cases = [({'core_training': 100}, 100, True),
+                 ({'learning_auxiliary': 100}, 100, True),
+                 ({}, 0, True),
+                 ({'core_training': 100}, 101, False),
+                 ({'unknown': 100}, 100, False),
+                 ({'core_training': True}, 1, False),
+                 ({'core_training': -1}, 0, False)]
+        for phases, total, valid in cases:
+            with self.subTest(phases=phases, total=total), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                config = dict(exp_name='test', final_hyperparameters=dict(resolved=dict(learning_rate=.1)))
+                evidence = FailureEvidenceArtifacts(root, 'texture', 'er_ace', 1, 52, config,
+                    False, Path('order1/lr01'), False, 'candidate', True)
+                with self.assertRaises(FloatingPointError):
+                    with evidence as artifacts:
+                        artifacts.logger.info('task=1 wall_s=1 flops=%s', json.dumps(
+                            dict(total_flops=total, phase_flops=phases)))
+                        raise FloatingPointError('Non-finite training loss test')
+                identity = dict(exp_name='test', dataset='texture', method='er_ace', order=1, seed=52)
+                if valid:
+                    self.assertEqual(failure_cost(root/'er_ace/order1', identity, 4)[0], total)
+                else:
+                    with self.assertRaises(ValueError):
+                        failure_cost(root/'er_ace/order1', identity, 4)
+
     def test_completed_erace_replays_missing_evidence_once(self):
         from cil_experiments import lr_search as search
         with tempfile.TemporaryDirectory() as tmp:
